@@ -74,16 +74,18 @@ contract MockPancakeRouter {
         return factoryAddr;
     }
     function addLiquidity(
-        address,
-        address,
-        uint256,
-        uint256,
+        address tokenA,
+        address tokenB,
+        uint256 amountADesired,
+        uint256 amountBDesired,
         uint256,
         uint256,
         address,
         uint256
-    ) external pure returns (uint256, uint256, uint256) {
-        return (0, 0, 0);
+    ) external returns (uint256, uint256, uint256) {
+        IERC20(tokenA).transferFrom(msg.sender, address(0xDEAD), amountADesired);
+        IERC20(tokenB).transferFrom(msg.sender, address(0xDEAD), amountBDesired);
+        return (amountADesired, amountBDesired, 0);
     }
     function swapExactTokensForTokens(
         uint256 amountIn,
@@ -164,36 +166,25 @@ contract DeployAndTestTestnetScript is Script, StdCheats {
         // 1. START BROADCAST FIRST
         vm.startBroadcast(deployerPrivateKey);
 
-        // 2. DEPLOY MOCK GNOSIS SAFES TO TESTNET/LOCAL (if they don't exist/empty code)
-        if (LP_ACCUMULATOR_WALLET.code.length == 0) LP_ACCUMULATOR_WALLET = address(new MockGnosisSafe());
-        if (FOUNDER_POOL_WALLET.code.length == 0) FOUNDER_POOL_WALLET = address(new MockGnosisSafe());
-        if (OPS_SAFE_705.code.length == 0) OPS_SAFE_705 = address(new MockGnosisSafe());
-        if (OPS_SAFE_7D5.code.length == 0) {
-            if (OPS_SAFE_7D5 == OPS_SAFE_705) {
-                OPS_SAFE_7D5 = OPS_SAFE_705;
-            } else {
-                OPS_SAFE_7D5 = address(new MockGnosisSafe());
-            }
-        }
-        if (TREASURY_SAFE.code.length == 0) TREASURY_SAFE = address(new MockGnosisSafe());
+        // 2. ALWAYS DEPLOY MOCKS FOR WALLETS AND EXTERNAL CONTRACTS
+        // This ensures the deployment script is 100% self-contained, does not require
+        // pre-existing funded wallets/tokens, and allows full verification transactions
+        // to run seamlessly on both local fork and live testnets.
+        LP_ACCUMULATOR_WALLET = address(new MockGnosisSafe());
+        FOUNDER_POOL_WALLET = address(new MockGnosisSafe());
+        OPS_SAFE_705 = address(new MockGnosisSafe());
+        OPS_SAFE_7D5 = address(new MockGnosisSafe());
+        TREASURY_SAFE = address(new MockGnosisSafe());
 
-        // Deploys Mock USDT if empty/not on chain
-        if (BSC_USDT.code.length == 0) {
-            MockUSDT mockUsdt = new MockUSDT();
-            BSC_USDT = address(mockUsdt);
-            // Pre-fund the deployer Address
-            mockUsdt.mint(deployerAddress, 1_000_000e18);
-        } else {
-            // If USDT is a real contract, try to mint if MockUSDT, otherwise proceed
-            try MockUSDT(BSC_USDT).mint(deployerAddress, 1_000_000e18) {} catch {}
-        }
+        // Deploy Mock USDT and pre-fund deployer EOA via standard contract call (no cheatcodes)
+        MockUSDT mockUsdt = new MockUSDT();
+        BSC_USDT = address(mockUsdt);
+        mockUsdt.mint(deployerAddress, 1_000_000e18);
 
-        // Deploys Mock PancakeSwap V2 Router/Factory if empty/not on chain
-        if (PANCAKESWAP_V2_ROUTER.code.length == 0) {
-            address mockPair = address(new MockGnosisSafe());
-            address mockFactory = address(new MockPancakeFactory(mockPair));
-            PANCAKESWAP_V2_ROUTER = address(new MockPancakeRouter(mockFactory));
-        }
+        // Deploy Mock PancakeSwap V2 Factory and Router
+        address mockPair = address(new MockGnosisSafe());
+        address mockFactory = address(new MockPancakeFactory(mockPair));
+        PANCAKESWAP_V2_ROUTER = address(new MockPancakeRouter(mockFactory));
 
         // ════════════════════════════════════════════════════════════════════════════════
         // PART 2 - DEPLOYMENT SEQUENCE
@@ -254,8 +245,9 @@ contract DeployAndTestTestnetScript is Script, StdCheats {
         token.transfer(address(rewardsPool), 400_000_000e18); // 80% Rewards Pool
         token.transfer(address(founderAlloc), 25_000_000e18); // 5% Founders Pool
         
-        // Transfer exactly remaining deployer balance to Treasury Safe to clear out to 0
-        uint256 deployerRemaining = token.balanceOf(deployerAddress);
+        // Transfer exactly remaining balance of the deploymentWallet to Treasury Safe to clear out to 0
+        address depWallet = token.deploymentWallet();
+        uint256 deployerRemaining = token.balanceOf(depWallet);
         if (deployerRemaining > 0) {
             token.transfer(TREASURY_SAFE, deployerRemaining);
         }
@@ -274,8 +266,8 @@ contract DeployAndTestTestnetScript is Script, StdCheats {
             pair = IPancakeFactory(factory).createPair(address(token), BSC_USDT);
         }
 
-        // Seeding Mock Liquidity (fund the deployer EOA with USDT dynamically using the deal cheatcode)
-        deal(BSC_USDT, deployerAddress, usdtLiquidity);
+        // Seeding Mock Liquidity (fund the deployer EOA with USDT via standard contract call)
+        MockUSDT(BSC_USDT).mint(deployerAddress, usdtLiquidity);
         
         // Approve and Add Liquidity
         IERC20(BSC_USDT).approve(PANCAKESWAP_V2_ROUTER, usdtLiquidity);
@@ -337,8 +329,9 @@ contract DeployAndTestTestnetScript is Script, StdCheats {
             abi.encodeWithSignature("setAuthorizedPlanCaller(uint8,address,bool)", 5, address(founderAlloc), true)
         );
 
-        // Sweep any remaining deployer balance to Treasury Safe right before enableTrading to guarantee 0-balance check passes
-        uint256 finalDeployerBal = token.balanceOf(deployerAddress);
+        // Sweep any remaining deploymentWallet balance to Treasury Safe right before enableTrading to guarantee 0-balance check passes
+        address finalDepWallet = token.deploymentWallet();
+        uint256 finalDeployerBal = token.balanceOf(finalDepWallet);
         if (finalDeployerBal > 0) {
             token.transfer(TREASURY_SAFE, finalDeployerBal);
         }
@@ -366,7 +359,7 @@ contract DeployAndTestTestnetScript is Script, StdCheats {
 
             // Transaction 2: USDT Staking Router Test
             // Fund the deployer address with USDT for this verification transaction
-            deal(BSC_USDT, deployerAddress, 1_000e18);
+            MockUSDT(BSC_USDT).mint(deployerAddress, 1_000e18);
             IERC20(BSC_USDT).approve(address(dappRouter), 100e18);
             
             uint256 positionId = dappRouter.stake(
