@@ -67,7 +67,7 @@ contract DeployTestnetScript is Script {
     address public constant TREASURY_SAFE =
         0x16e50530Ca7FcDbe5eaEaB584CC48af828929030;
     address public constant BACKEND_SIGNER =
-        0x9999999999999999999999999999999999999999; // Placeholder Open Item 010
+        0xCB6b98fA60011DC8FEEb5568fFf6a9cD74CbB34B;
 
     // 1.2 Fixed BSC Testnet (Chain ID 97) Addresses
     // Official PancakeSwap V2 Router on BSC Testnet
@@ -157,14 +157,12 @@ contract DeployTestnetScript is Script {
         // Step 8 - Set StakingRewardsPool Address in AIEFToken
         token.setStakingRewardsPool(address(rewardsPool));
 
+        // Step 7 - Distribute Token Allocations
+        token.transfer(address(rewardsPool), 400_000_000e18); // 80% — Rewards Pool
+        token.transfer(address(founderAlloc), 25_000_000e18); // 5%  — Founders Pool
+        token.transfer(TREASURY_SAFE, 75_000_000e18); // 15% — Treasury Safe
+
         // Step 9 - Seed PancakeSwap Liquidity and Create Pair
-        // Add liquidity via PancakeSwap V2 (500k AIEF + 10,000 USDT to establish launch price)
-        // Note: Payer/Deployer EOA must already hold the required USDT on Testnet to execute this step!
-        uint256 aiefLiquidity = 500_000e18;
-        uint256 usdtLiquidity = 10_000e18;
-
-        token.approve(PANCAKESWAP_V2_ROUTER, aiefLiquidity);
-
         // Fetch or create the DEX pair dynamically on the testnet
         address factory = IPancakeRouter(PANCAKESWAP_V2_ROUTER).factory();
         pair = IPancakeFactory(factory).getPair(address(token), BSC_USDT);
@@ -174,30 +172,8 @@ contract DeployTestnetScript is Script {
                 BSC_USDT
             );
         }
-
-        // Standard PancakeSwap V2 liquidity seeding (fails if EOA has insufficient USDT)
-        IERC20(BSC_USDT).approve(PANCAKESWAP_V2_ROUTER, usdtLiquidity);
-        IPancakeRouter(PANCAKESWAP_V2_ROUTER).addLiquidity(
-            address(token),
-            BSC_USDT,
-            aiefLiquidity,
-            usdtLiquidity,
-            0,
-            0,
-            deployerAddress,
-            block.timestamp + 10 minutes
-        );
-
-        // Step 7 - Distribute Token Allocations
-        token.transfer(address(rewardsPool), 400_000_000e18); // 80% Rewards Pool
-        token.transfer(address(founderAlloc), 25_000_000e18); // 5% Founders Pool
-
-        // Transfer exactly remaining deployer balance to Treasury Safe
-        // This clears out Deployer's balance to exactly zero as strictly required!
-        uint256 deployerRemaining = token.balanceOf(deployerAddress);
-        if (deployerRemaining > 0) {
-            token.transfer(TREASURY_SAFE, deployerRemaining);
-        }
+        console2.log("DEX Pair established at address:", pair);
+        console2.log("Note: Initial PancakeSwap liquidity seeding (500k AIEF + 10k USDT) to be triggered post-deploy via Treasury Safe.");
 
         // Step 10 - Register DEX Pair in AIEFToken
         token.setDexPair(pair);

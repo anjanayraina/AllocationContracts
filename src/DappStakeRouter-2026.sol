@@ -1,130 +1,26 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
 
-// ════════════════════════════════════════════════════════════════════════════════
-//  AIEF — Artificial Intelligence Entropy GamiFi
-//  CONTRACT 6 OF 6 — DappStakeRouter.sol
-//
-//  Source authority : SC Developer Specification v1.3 (25 May 2026)
-//  BRD authority    : Business Requirements Document v1.3
-//
-//  ┌─────────────────────────────────────────────────────────────────────────┐
-//  │  Owned by Ops Safe (3-of-5 Gnosis Safe) after deployment.              │
-//  │  NOT renounced — Ops Safe controls slippage configuration.             │
-//  │  Permanent router — active during controlled launch and forever after. │
-//  └─────────────────────────────────────────────────────────────────────────┘
-//
-//  Network  : BNB Smart Chain (BSC) — Chain ID 56 / Testnet 97
-//  Solidity : 0.8.19 pinned (avoids PUSH0 opcode BSC compatibility risk)
-//  OZ       : 4.9.6 — pinned, do not upgrade without audit re-review
-//
-//  ── DEPLOYMENT CHECKLIST — VERIFY BEFORE OPENING TO USERS ──────────────────
-//  □ AIEFToken exemptions — BOTH flags required:
-//      token.setExempt(address(DappStakeRouter), true, true)
-//      burnExempt=true: AIEF received from PancakeSwap is not subject to 0.5% burn
-//      dexExempt=true:  Router can buy from DEX during 180-day restriction window
-//    Without both, the USDT staking route does not work.
-//
-//  □ Whitelist DappStakeRouter as a routerCaller in StakingContract:
-//      StakingContract.setRouterCaller(address(DappStakeRouter), true)
-//    Without this, stakeFor() reverts "SC: caller not authorized for plan".
-//    Note: the function is setRouterCaller() — NOT setWhitelisted().
-//
-//  □ PancakeSwap AIEF/USDT pair must exist and have liquidity seeded before
-//    this router is used. The pair address does not need to be registered here —
-//    the router derives the path from token + usdt addresses directly.
-//
-//  □ Confirm stakingContract_ constructor argument is the deployed StakingContract.
-//    Immutable — cannot be changed after deployment.
-//
-//  ── WHAT THIS CONTRACT DOES ─────────────────────────────────────────────────
-//  • Accepts USDT from msg.sender and stakes AIEF for them in one transaction:
-//      Step 1: Pull USDT from msg.sender via safeTransferFrom
-//      Step 2: Swap USDT → AIEF on PancakeSwap V2 (user-supplied minAiefOut)
-//      Step 3: Call StakingContract.stakeFor(msg.sender, aiefReceived, planId)
-//  • Permanent dApp USDT staking route — available during controlled launch
-//    (180-day DEX restriction) and permanently after
-//  • Zero custody per transaction — balance-delta postconditions enforced
-//  • Pausable by Ops Safe for emergencies — does not affect existing positions
-//
-//  ── CONTROL BOUNDARIES ───────────────────────────────────────────────────────
-//  Ops Safe controls:
-//    • pause / unpause  — emergency stop for new stake() entries only
-//    • slippageBps      — advisory preview tolerance used by previewStake() only
-//    • minUsdtPerStake / maxUsdtPerStake — operational USDT limits per transaction
-//                         (bounded by immutable ABSOLUTE_MAX_USDT)
-//
-//  User / dApp controls:
-//    • minAiefOut       — execution slippage floor, enforced on-chain in stake()
-//                         previewStake() provides a suggested value; user signs it
-//    • deadline         — transaction expiry, capped at block.timestamp + 30 minutes
-//
-//  Ops Safe cannot change execution slippage. The user's signed minAiefOut is
-//  the sole on-chain slippage enforcement. slippageBps has no effect on stake().
-//
-//  ── PLAN VALIDATION ───────────────────────────────────────────────────────────────────────────────
-//  DappStakeRouter does NOT hardcode plan IDs. Plan validity is delegated to
-//  StakingContract.isRouterPlanAllowed(planId) — the single source of truth.
-//  This call happens before the swap so an invalid plan fails cheaply.
-//  Plan 0 (Flexible) and Plan 5 (Founder Bond) have routerAllowed=false in the
-//  registry and will be rejected. Newly registered router-allowed plans are
-//  automatically supported without redeploying the router.
-//
-//  ── SWAP VARIANT — STANDARD (NOT FEE-ON-TRANSFER) ───────────────────────────
-//  This contract uses swapExactTokensForTokens (standard PancakeSwap variant),
-//  NOT swapExactTokensForTokensSupportingFeeOnTransferTokens.
-//  Reason: DappStakeRouter is isTransferBurnExempt in AIEFToken. When PancakeSwap
-//  transfers AIEF to this contract, the transfer is exempt from the 0.5% burn.
-//  The router receives the full swap output. The standard variant correctly
-//  expects to receive exactly amounts[1] — which it does because the transfer
-//  is exempt. The FeeOnTransfer variant is NOT needed and must NOT be used here.
-//
-//  ── USDT DECIMALS — CRITICAL ────────────────────────────────────────────────
-//  BSC USDT = 18 decimals on-chain (unlike Ethereum USDT = 6 decimals).
-//  MIN_USDT and MAX_USDT are derived from IERC20Metadata(usdt_).decimals()
-//  at construction — NOT hardcoded. This ensures correctness regardless of the
-//  exact USDT contract used and protects against a common BSC deployment mistake.
-//
-//  ── SLIPPAGE PROTECTION ────────────────────────────────────────────────────────
-//  The user/dApp supplies minAiefOut and deadline directly into stake().
-//  Computing amountOutMin from getAmountsOut() inside the transaction provides
-//  no sandwich protection — reserves could be manipulated before execution.
-//  previewStake() is an advisory UI helper only. The user's signed minAiefOut
-//  is the actual on-chain enforcement. deadline is capped at block.timestamp
-//  + MAX_DEADLINE_WINDOW (30 minutes) to prevent near-permanent authorisations.
-//
-//  ── TRANSFER-BURN EXEMPTION REQUIRED ────────────────────────────────────────
-//  DappStakeRouter MUST be isTransferBurnExempt in AIEFToken (deployment step 10):
-//    token.setExempt(address(DappStakeRouter), true, true)
-//  burnExempt=true: AIEF received from PancakeSwap is not burned.
-//  dexExempt=true:  Router can buy from DEX during the 180-day restriction window.
-//  Without both flags, the route does not work correctly.
-// ════════════════════════════════════════════════════════════════════════════════
-
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Minimal interfaces — only functions this contract calls
-// ─────────────────────────────────────────────────────────────────────────────
-
 interface IPancakeRouter {
     /// @dev Standard swap — expects to receive exactly amounts[1].
     ///      Safe here because DappStakeRouter is transfer-burn exempt.
     function swapExactTokensForTokens(
-        uint256          amountIn,
-        uint256          amountOutMin,
+        uint256 amountIn,
+        uint256 amountOutMin,
         address[] calldata path,
-        address          to,
-        uint256          deadline
+        address to,
+        uint256 deadline
     ) external returns (uint256[] memory amounts);
 
     /// @dev Preview: returns amounts[1] = expected AIEF output for usdtIn.
     ///      Used to compute amountOutMin with slippage applied.
     function getAmountsOut(
-        uint256          amountIn,
+        uint256 amountIn,
         address[] calldata path
     ) external view returns (uint256[] memory amounts);
 }
@@ -135,7 +31,7 @@ interface IStakingContract {
     function stakeFor(
         address beneficiary,
         uint256 amount,
-        uint8   planId
+        uint8 planId
     ) external returns (uint256 positionId);
 
     /// @dev Returns true if planId exists, is active, and has routerAllowed=true.
@@ -229,7 +125,7 @@ contract DappStakeRouter is ReentrancyGuard {
         address indexed staker,
         uint256 usdtIn,
         uint256 aiefStaked,
-        uint8   planId,
+        uint8 planId,
         uint256 positionId
     );
 
@@ -285,34 +181,37 @@ contract DappStakeRouter is ReentrancyGuard {
         address stakingContract_,
         address opsSafe_
     ) {
-        require(token_           != address(0), "DSR: zero token");
-        require(usdt_            != address(0), "DSR: zero usdt");
-        require(pancakeRouter_   != address(0), "DSR: zero router");
+        require(token_ != address(0), "DSR: zero token");
+        require(usdt_ != address(0), "DSR: zero usdt");
+        require(pancakeRouter_ != address(0), "DSR: zero router");
         require(stakingContract_ != address(0), "DSR: zero staking");
-        require(opsSafe_         != address(0), "DSR: zero ops safe");
+        require(opsSafe_ != address(0), "DSR: zero ops safe");
 
-        require(token_.code.length           > 0, "DSR: token not a contract");
-        require(usdt_.code.length            > 0, "DSR: usdt not a contract");
-        require(pancakeRouter_.code.length   > 0, "DSR: router not a contract");
-        require(stakingContract_.code.length > 0, "DSR: staking not a contract");
-        require(opsSafe_.code.length         > 0, "DSR: ops safe not a contract");
+        require(token_.code.length > 0, "DSR: token not a contract");
+        require(usdt_.code.length > 0, "DSR: usdt not a contract");
+        require(pancakeRouter_.code.length > 0, "DSR: router not a contract");
+        require(
+            stakingContract_.code.length > 0,
+            "DSR: staking not a contract"
+        );
+        require(opsSafe_.code.length > 0, "DSR: ops safe not a contract");
 
         // Derive USDT unit from on-chain decimals — NOT hardcoded.
         // BSC USDT = 18 decimals. Handles any USDT variant correctly.
-        uint8   decimals = IERC20Metadata(usdt_).decimals();
-        uint256 unit     = 10 ** uint256(decimals);
+        uint8 decimals = IERC20Metadata(usdt_).decimals();
+        uint256 unit = 10 ** uint256(decimals);
 
-        USDT_UNIT        = unit;
-        ABSOLUTE_MAX_USDT = 100_000 * unit;  // hard ceiling — never changeable
-        minUsdtPerStake  = 1       * unit;   // operational default: ~$1
-        maxUsdtPerStake  = 10_000  * unit;   // operational default: ~$10,000
+        USDT_UNIT = unit;
+        ABSOLUTE_MAX_USDT = 100_000 * unit; // hard ceiling — never changeable
+        minUsdtPerStake = 1 * unit; // operational default: ~$1
+        maxUsdtPerStake = 10_000 * unit; // operational default: ~$10,000
 
-        token           = IERC20(token_);
-        usdt            = IERC20(usdt_);
-        pancakeRouter   = IPancakeRouter(pancakeRouter_);
+        token = IERC20(token_);
+        usdt = IERC20(usdt_);
+        pancakeRouter = IPancakeRouter(pancakeRouter_);
         stakingContract = IStakingContract(stakingContract_);
-        opsSafe         = opsSafe_;
-        slippageBps     = DEFAULT_SLIPPAGE_BPS;
+        opsSafe = opsSafe_;
+        slippageBps = DEFAULT_SLIPPAGE_BPS;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -356,21 +255,27 @@ contract DappStakeRouter is ReentrancyGuard {
     /// @return positionId  StakingContract position index for msg.sender
     function stake(
         uint256 usdtIn,
-        uint8   planId,
+        uint8 planId,
         uint256 minAiefOut,
         uint256 deadline
     ) external nonReentrant whenNotPaused returns (uint256 positionId) {
         // ── CHECKS ───────────────────────────────────────────────────────────
 
-        require(usdtIn     >= minUsdtPerStake,                       "DSR: below minimum");
-        require(usdtIn     <= maxUsdtPerStake,                       "DSR: above maximum");
+        require(usdtIn >= minUsdtPerStake, "DSR: below minimum");
+        require(usdtIn <= maxUsdtPerStake, "DSR: above maximum");
         // Plan validity deferred to StakingContract registry — no hardcoded planId ranges.
         // isRouterPlanAllowed() checks: exists=true, active=true, routerAllowed=true.
         // Called before USDT pull so a rejected plan fails cheaply without wasting gas.
-        require(stakingContract.isRouterPlanAllowed(planId),         "DSR: plan not router-allowed");
-        require(minAiefOut >  0,                                     "DSR: zero min out");
-        require(deadline   >= block.timestamp,                       "DSR: deadline expired");
-        require(deadline   <= block.timestamp + MAX_DEADLINE_WINDOW, "DSR: deadline too far");
+        require(
+            stakingContract.isRouterPlanAllowed(planId),
+            "DSR: plan not router-allowed"
+        );
+        require(minAiefOut > 0, "DSR: zero min out");
+        require(deadline >= block.timestamp, "DSR: deadline expired");
+        require(
+            deadline <= block.timestamp + MAX_DEADLINE_WINDOW,
+            "DSR: deadline too far"
+        );
 
         // ── SNAPSHOT BALANCES (balance-delta post-condition baseline) ─────────
         uint256 usdtBefore = usdt.balanceOf(address(this));
@@ -407,11 +312,11 @@ contract DappStakeRouter is ReentrancyGuard {
 
         // ── MEASURE ACTUAL AIEF RECEIVED ──────────────────────────────────────
         uint256 aiefReceived = token.balanceOf(address(this)) - aiefBefore;
-        require(aiefReceived > 0,              "DSR: zero AIEF received");
+        require(aiefReceived > 0, "DSR: zero AIEF received");
         // Defence-in-depth: verify balance delta satisfies the user's minAiefOut.
         // The swap's amountOutMin already enforces this, but an explicit post-swap
         // check provides a clean contract-level error and guards against exotic routers.
-        require(aiefReceived >= minAiefOut,    "DSR: insufficient AIEF received");
+        require(aiefReceived >= minAiefOut, "DSR: insufficient AIEF received");
 
         // ── RESET USDT APPROVAL ───────────────────────────────────────────────
         usdt.forceApprove(address(pancakeRouter), 0);
@@ -426,8 +331,11 @@ contract DappStakeRouter is ReentrancyGuard {
         token.forceApprove(address(stakingContract), 0);
 
         // ── BALANCE-DELTA POST-CONDITIONS ─────────────────────────────────────
-        require(usdt.balanceOf(address(this))  == usdtBefore, "DSR: USDT delta");
-        require(token.balanceOf(address(this)) == aiefBefore, "DSR: AIEF delta");
+        require(usdt.balanceOf(address(this)) == usdtBefore, "DSR: USDT delta");
+        require(
+            token.balanceOf(address(this)) == aiefBefore,
+            "DSR: AIEF delta"
+        );
 
         emit Staked(msg.sender, usdtIn, aiefReceived, planId, positionId);
     }
@@ -442,7 +350,7 @@ contract DappStakeRouter is ReentrancyGuard {
     function setSlippage(uint16 newBps) external onlyOpsSafe {
         require(newBps >= MIN_SLIPPAGE_BPS, "DSR: slippage too low");
         require(newBps <= MAX_SLIPPAGE_BPS, "DSR: slippage too high");
-        require(newBps != slippageBps,      "DSR: same slippage");
+        require(newBps != slippageBps, "DSR: same slippage");
         uint16 old = slippageBps;
         slippageBps = newBps;
         emit SlippageUpdated(old, newBps);
@@ -456,12 +364,17 @@ contract DappStakeRouter is ReentrancyGuard {
     ///
     /// @param newMin New minimum USDT per transaction (>= 1 × USDT_UNIT)
     /// @param newMax New maximum USDT per transaction (<= ABSOLUTE_MAX_USDT)
-    function setUsdtLimits(uint256 newMin, uint256 newMax) external onlyOpsSafe {
-        require(newMin >= USDT_UNIT,           "DSR: min below 1 unit");
-        require(newMax <= ABSOLUTE_MAX_USDT,   "DSR: max above absolute cap");
-        require(newMin <= newMax,              "DSR: min exceeds max");
-        require(newMin != minUsdtPerStake ||
-                newMax != maxUsdtPerStake,     "DSR: same limits");
+    function setUsdtLimits(
+        uint256 newMin,
+        uint256 newMax
+    ) external onlyOpsSafe {
+        require(newMin >= USDT_UNIT, "DSR: min below 1 unit");
+        require(newMax <= ABSOLUTE_MAX_USDT, "DSR: max above absolute cap");
+        require(newMin <= newMax, "DSR: min exceeds max");
+        require(
+            newMin != minUsdtPerStake || newMax != maxUsdtPerStake,
+            "DSR: same limits"
+        );
         minUsdtPerStake = newMin;
         maxUsdtPerStake = newMax;
         emit UsdtLimitsUpdated(newMin, newMax);
@@ -501,11 +414,9 @@ contract DappStakeRouter is ReentrancyGuard {
     /// @param usdtIn   USDT amount to preview — must be in [minUsdtPerStake, maxUsdtPerStake]
     /// @return expectedAIEF  Raw PancakeSwap output at current reserves
     /// @return suggestedMin  expectedAIEF with slippageBps applied — suggested minAiefOut
-    function previewStake(uint256 usdtIn)
-        external
-        view
-        returns (uint256 expectedAIEF, uint256 suggestedMin)
-    {
+    function previewStake(
+        uint256 usdtIn
+    ) external view returns (uint256 expectedAIEF, uint256 suggestedMin) {
         require(usdtIn >= minUsdtPerStake, "DSR: below minimum");
         require(usdtIn <= maxUsdtPerStake, "DSR: above maximum");
 
@@ -515,7 +426,9 @@ contract DappStakeRouter is ReentrancyGuard {
 
         uint256[] memory amounts = pancakeRouter.getAmountsOut(usdtIn, path);
         expectedAIEF = amounts[1];
-        suggestedMin = (expectedAIEF * (BPS_DENOMINATOR - slippageBps)) / BPS_DENOMINATOR;
+        suggestedMin =
+            (expectedAIEF * (BPS_DENOMINATOR - slippageBps)) /
+            BPS_DENOMINATOR;
     }
 
     /// @notice Returns the current USDT and AIEF balances of this contract.
@@ -527,9 +440,6 @@ contract DappStakeRouter is ReentrancyGuard {
         view
         returns (uint256 usdtBalance, uint256 aiefBalance)
     {
-        return (
-            usdt.balanceOf(address(this)),
-            token.balanceOf(address(this))
-        );
+        return (usdt.balanceOf(address(this)), token.balanceOf(address(this)));
     }
 }

@@ -1,103 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
 
-// ════════════════════════════════════════════════════════════════════════════════
-//  AIEF — Artificial Intelligence Entropy GamiFi
-//  CONTRACT 4 OF 6 — FounderAllocationContract.sol
-//
-//  Source authority : SC Developer Specification v1.3 (25 May 2026)
-//  BRD authority    : Business Requirements Document v1.3
-//
-//  ┌─────────────────────────────────────────────────────────────────────────┐
-//  │  Owned by Ops Safe (3-of-5 Gnosis Safe) after deployment.              │
-//  │  NOT renounced — Ops Safe controls founder registration.               │
-//  │  Ops Safe CANNOT redirect pool tokens or change the staking route.     │
-//  └─────────────────────────────────────────────────────────────────────────┘
-//
-//  Network  : BNB Smart Chain (BSC) — Chain ID 56 / Testnet 97
-//  Solidity : 0.8.19 pinned (avoids PUSH0 opcode BSC compatibility risk)
-//  OZ       : 4.9.6 — pinned, do not upgrade without audit re-review
-//
-//  ── WHAT THIS CONTRACT DOES ─────────────────────────────────────────────────
-//  • Holds the campaign AIEF allocation for a configurable founder/allocation campaign
-//  • Registers Ops-approved founders and stakes their allocation directly into
-//    StakingContract under the configured founderPlanId
-//  • Tokens never reach founder wallets — staked directly from pool into StakingContract
-//  • Exposes public on-chain founder registry (registeredFounders, founderInfo)
-//  • Transfers remaining balance to remainderWallet when campaign ends (sold-out
-//    OR deadline passed)
-//
-//  ── CAMPAIGN CONFIGURABILITY ─────────────────────────────────────────────────
-//  This contract is designed as a reusable campaign module — not a hardcoded
-//  founder tool. Each campaign deployment specifies its own:
-//    founderPlanId           → any planId registered in StakingContract
-//    maxFounders             → seat cap for this campaign
-//    maxAllocationPerFounder → AIEF hard cap per participant
-//    campaignEndTime         → deadline for seat-based remainder release
-//    remainderWallet         → immutable destination for unused allocation
-//
-//  Examples:
-//    Normal Founder Campaign : maxFounders=500, planId=5, cap=50,000 AIEF
-//    Super Founder Campaign  : maxFounders=10,  planId=6, cap=500,000 AIEF
-//    Strategic Partner Round : maxFounders=50,  planId=7, custom cap
-//
-//  ── WHAT THIS CONTRACT DOES NOT DO ─────────────────────────────────────────
-//  • NO USDT payment verification — off-chain, Ops Safe verified
-//  • NO price calculation or oracle — off-chain, Ops Safe calculated
-//  • NO vesting schedule — staked directly, lock enforced by StakingContract
-//  • NO refund mechanism — payment verification is entirely off-chain
-//  • NO founder removal or allocation editing after registration
-//  • NO batch registration
-//  • NO arbitrary drain or sweep before sold-out or deadline
-//
-//  ── FOUNDER PRICING MODEL (off-chain — not in this contract) ────────────────
-//  First 30 days  : 50,000 AIEF fixed per founder (at $0.02 reference price)
-//  After 30 days  : min($1,000 / approvedPriceSnapshot, maxAllocationPerFounder)
-//                   Ops Safe calculates off-chain and passes approvedAmount here.
-//  Hard cap       : maxAllocationPerFounder per founder regardless of price.
-//
-//  ── ALL CAMPAIGN PARTICIPANTS ARE EQUAL ─────────────────────────────────────
-//  founderNumber (1-based) is recorded for display purposes only. It carries no
-//  economic weight, no governance weight, and no tier significance.
-//
-//  ── REMAINDER RELEASE CONDITIONS ─────────────────────────────────────────────
-//  transferRemainder() is callable by Ops Safe when EITHER:
-//    (a) all campaign seats are filled (founderCount == maxFounders), OR
-//    (b) campaign deadline has passed (block.timestamp >= campaignEndTime)
-//  This ensures unused allocation is always recoverable after the campaign,
-//  even if not all seats are filled.
-//
-//  ── DEPLOYMENT CHECKLIST — EXECUTE IN ORDER ─────────────────────────────────
-//  1. Register the campaign staking plan in StakingContract:
-//       StakingContract.registerPlan(founderPlanId_, PlanConfig({...}))
-//     The plan must exist and be active before this contract can be used.
-//
-//  2. Deploy FounderAllocationContract with all 8 constructor arguments.
-//     Verify FounderContractDeployed event on BSCScan — confirms all params.
-//
-//  3. Transfer campaign AIEF allocation to this contract:
-//       token.transfer(address(FounderAllocationContract), allocationAmount)
-//     Verify: poolBalance() == allocationAmount
-//
-//  4. Authorize this contract in StakingContract:
-//       StakingContract.setAuthorizedPlanCaller(founderPlanId_, address(this), true)
-//     Without this, every registerFounder() reverts "SC: caller not authorized for plan".
-//
-//  5. FounderAllocationContract must be transfer-burn exempt in AIEFToken:
-//       token.setExempt(address(FounderAllocationContract), true, false)
-//     burnExempt=true: exact AIEF routed to StakingContract without 0.5% burn.
-//     dexExempt=false: this contract never buys from the DEX.
-//
-//  6. Ops Safe calls registerFounder() after off-chain payment verification.
-// ════════════════════════════════════════════════════════════════════════════════
-
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Minimal interface — only the one function this contract calls
-// ─────────────────────────────────────────────────────────────────────────────
 
 interface IStakingContract {
     /// @notice Stake on behalf of a beneficiary. Caller must be authorized
@@ -105,7 +11,7 @@ interface IStakingContract {
     function stakeFor(
         address beneficiary,
         uint256 amount,
-        uint8   planId
+        uint8 planId
     ) external returns (uint256 positionId);
 }
 
@@ -170,10 +76,10 @@ contract FounderAllocationContract is ReentrancyGuard {
     ///         Enables direct dApp reads without event indexing.
     ///         founderInfo[wallet].founderNumber == 0 means not registered.
     struct FounderInfo {
-        uint256 founderNumber;    // 1-based seat number (display only)
-        uint256 allocatedAmount;  // AIEF staked for this participant
-        uint256 positionId;       // StakingContract position index
-        uint64  registeredAt;     // block.timestamp at registration
+        uint256 founderNumber; // 1-based seat number (display only)
+        uint256 allocatedAmount; // AIEF staked for this participant
+        uint256 positionId; // StakingContract position index
+        uint64 registeredAt; // block.timestamp at registration
     }
 
     mapping(address => FounderInfo) public founderInfo;
@@ -189,7 +95,7 @@ contract FounderAllocationContract is ReentrancyGuard {
         uint256 founderNumber,
         uint256 amount,
         uint256 positionId,
-        uint64  registeredAt
+        uint64 registeredAt
     );
 
     /// @notice Emitted in the constructor. Permanent on-chain audit trail of all
@@ -198,11 +104,11 @@ contract FounderAllocationContract is ReentrancyGuard {
         address indexed token,
         address indexed stakingContract,
         address indexed opsSafe,
-        uint8           founderPlanId,
-        uint256         maxFounders,
-        uint256         maxAllocationPerFounder,
-        uint256         campaignEndTime,
-        address         remainderWallet
+        uint8 founderPlanId,
+        uint256 maxFounders,
+        uint256 maxAllocationPerFounder,
+        uint256 campaignEndTime,
+        address remainderWallet
     );
 
     /// @notice Emitted when Ops Safe transfers the post-campaign remainder.
@@ -234,38 +140,55 @@ contract FounderAllocationContract is ReentrancyGuard {
         address token_,
         address stakingContract_,
         address opsSafe_,
-        uint8   founderPlanId_,
+        uint8 founderPlanId_,
         uint256 maxFounders_,
         uint256 maxAllocationPerFounder_,
         uint256 campaignEndTime_,
         address remainderWallet_
     ) {
-        require(token_                    != address(0), "FAC: zero token");
-        require(stakingContract_          != address(0), "FAC: zero staking contract");
-        require(opsSafe_                  != address(0), "FAC: zero ops safe");
-        require(remainderWallet_          != address(0), "FAC: zero remainder wallet");
-        require(maxFounders_              >  0,          "FAC: zero max founders");
-        require(maxAllocationPerFounder_  >= 1e18,       "FAC: invalid allocation cap");
-        require(campaignEndTime_          >  block.timestamp, "FAC: invalid campaign end");
+        require(token_ != address(0), "FAC: zero token");
+        require(stakingContract_ != address(0), "FAC: zero staking contract");
+        require(opsSafe_ != address(0), "FAC: zero ops safe");
+        require(remainderWallet_ != address(0), "FAC: zero remainder wallet");
+        require(maxFounders_ > 0, "FAC: zero max founders");
+        require(
+            maxAllocationPerFounder_ >= 1e18,
+            "FAC: invalid allocation cap"
+        );
+        require(
+            campaignEndTime_ > block.timestamp,
+            "FAC: invalid campaign end"
+        );
 
-        require(token_.code.length           > 0, "FAC: token not a contract");
-        require(stakingContract_.code.length > 0, "FAC: staking not a contract");
-        require(opsSafe_.code.length         > 0, "FAC: ops safe not a contract");
-        require(remainderWallet_.code.length > 0, "FAC: remainder wallet not a contract");
+        require(token_.code.length > 0, "FAC: token not a contract");
+        require(
+            stakingContract_.code.length > 0,
+            "FAC: staking not a contract"
+        );
+        require(opsSafe_.code.length > 0, "FAC: ops safe not a contract");
+        require(
+            remainderWallet_.code.length > 0,
+            "FAC: remainder wallet not a contract"
+        );
 
-        token                  = IERC20(token_);
-        stakingContract        = IStakingContract(stakingContract_);
-        opsSafe                = opsSafe_;
-        founderPlanId          = founderPlanId_;
-        maxFounders            = maxFounders_;
+        token = IERC20(token_);
+        stakingContract = IStakingContract(stakingContract_);
+        opsSafe = opsSafe_;
+        founderPlanId = founderPlanId_;
+        maxFounders = maxFounders_;
         maxAllocationPerFounder = maxAllocationPerFounder_;
-        campaignEndTime        = campaignEndTime_;
-        remainderWallet        = remainderWallet_;
+        campaignEndTime = campaignEndTime_;
+        remainderWallet = remainderWallet_;
 
         emit FounderContractDeployed(
-            token_, stakingContract_, opsSafe_,
-            founderPlanId_, maxFounders_, maxAllocationPerFounder_,
-            campaignEndTime_, remainderWallet_
+            token_,
+            stakingContract_,
+            opsSafe_,
+            founderPlanId_,
+            maxFounders_,
+            maxAllocationPerFounder_,
+            campaignEndTime_,
+            remainderWallet_
         );
     }
 
@@ -308,11 +231,11 @@ contract FounderAllocationContract is ReentrancyGuard {
     ) external onlyOpsSafe nonReentrant {
         // ── CHECKS ───────────────────────────────────────────────────────────
 
-        require(founderWallet != address(0),           "FAC: zero wallet");
-        require(block.timestamp < campaignEndTime,     "FAC: campaign ended");
-        require(founderCount < maxFounders,            "FAC: all seats filled");
-        require(!registeredFounders[founderWallet],    "FAC: already registered");
-        require(approvedAmount >= 1e18,                "FAC: below min stake");
+        require(founderWallet != address(0), "FAC: zero wallet");
+        require(block.timestamp < campaignEndTime, "FAC: campaign ended");
+        require(founderCount < maxFounders, "FAC: all seats filled");
+        require(!registeredFounders[founderWallet], "FAC: already registered");
+        require(approvedAmount >= 1e18, "FAC: below min stake");
         require(
             approvedAmount <= maxAllocationPerFounder,
             "FAC: above allocation cap"
@@ -326,12 +249,12 @@ contract FounderAllocationContract is ReentrancyGuard {
         registeredFounders[founderWallet] = true;
         founderCount++;
         uint256 thisFounderNumber = founderCount; // 1-based (captured after increment)
-        uint64  registeredAt      = uint64(block.timestamp);
-        totalAllocated           += approvedAmount;
+        uint64 registeredAt = uint64(block.timestamp);
+        totalAllocated += approvedAmount;
 
-        founderInfo[founderWallet].founderNumber   = thisFounderNumber;
+        founderInfo[founderWallet].founderNumber = thisFounderNumber;
         founderInfo[founderWallet].allocatedAmount = approvedAmount;
-        founderInfo[founderWallet].registeredAt    = registeredAt;
+        founderInfo[founderWallet].registeredAt = registeredAt;
 
         // ── INTERACTIONS ─────────────────────────────────────────────────────
 
@@ -342,7 +265,7 @@ contract FounderAllocationContract is ReentrancyGuard {
         uint256 positionId = stakingContract.stakeFor(
             founderWallet,
             approvedAmount,
-            founderPlanId        // immutable — set at deployment, not hardcoded
+            founderPlanId // immutable — set at deployment, not hardcoded
         );
 
         token.forceApprove(address(stakingContract), 0);
@@ -352,7 +275,11 @@ contract FounderAllocationContract is ReentrancyGuard {
         founderInfo[founderWallet].positionId = positionId;
 
         emit FounderRegistered(
-            founderWallet, thisFounderNumber, approvedAmount, positionId, registeredAt
+            founderWallet,
+            thisFounderNumber,
+            approvedAmount,
+            positionId,
+            registeredAt
         );
     }
 
@@ -406,7 +333,8 @@ contract FounderAllocationContract is ReentrancyGuard {
     /// @notice Returns true if the campaign has ended —
     ///         either all seats filled or deadline passed.
     function campaignEnded() external view returns (bool) {
-        return founderCount == maxFounders || block.timestamp >= campaignEndTime;
+        return
+            founderCount == maxFounders || block.timestamp >= campaignEndTime;
     }
 
     /// @notice Returns true if the given wallet is a registered participant.
@@ -417,17 +345,24 @@ contract FounderAllocationContract is ReentrancyGuard {
     /// @notice Full registration record for a participant wallet.
     ///         Returns zero-value struct if wallet is not registered
     ///         (founderNumber == 0 indicates not registered).
-    function getFounderInfo(address wallet)
+    function getFounderInfo(
+        address wallet
+    )
         external
         view
         returns (
             uint256 founderNum,
             uint256 allocatedAmount,
             uint256 positionId,
-            uint64  registeredAt
+            uint64 registeredAt
         )
     {
         FounderInfo memory f = founderInfo[wallet];
-        return (f.founderNumber, f.allocatedAmount, f.positionId, f.registeredAt);
+        return (
+            f.founderNumber,
+            f.allocatedAmount,
+            f.positionId,
+            f.registeredAt
+        );
     }
 }

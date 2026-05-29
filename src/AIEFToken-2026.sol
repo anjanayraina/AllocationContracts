@@ -1,82 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
 
-// ════════════════════════════════════════════════════════════════════════════════
-//  AIEF — Artificial Intelligence Entropy GamiFi
-//  CONTRACT 1 OF 6 — AIEFToken.sol
-//
-//  Source authority : SC Developer Specification v1.3 (25 May 2026)
-//  BRD authority    : Business Requirements Document v1.3
-//
-//  ┌─────────────────────────────────────────────────────────────────────────┐
-//  │  IMMUTABLE AFTER renounceOwnership() IS CALLED.                        │
-//  │  Every address, rate, and threshold is permanent from that point.       │
-//  │  Zero-tolerance for deployment errors — testnet-verify everything first.│
-//  └─────────────────────────────────────────────────────────────────────────┘
-//
-//  Network  : BNB Smart Chain (BSC) — Chain ID 56 / Testnet 97
-//  Solidity : 0.8.19  (pinned — avoids PUSH0 opcode BSC compatibility risk)
-//  OZ       : 4.9.6 — pinned, do not upgrade without audit re-review
-//
-//  ── WHAT THIS CONTRACT DOES ─────────────────────────────────────────────────
-//  • BEP-20 token: 500,000,000 AIEF, fixed supply, no mint function
-//  • 0% buy tax
-//  • 4% sell tax — equal 4-way split (burn / founderPool / rewards / LP accumulator)
-//  • 0.5% transfer burn on every non-exempt transfer
-//  • 200,000,000 AIEF burn floor — supply-reducing burns stop automatically at this supply
-//  • 180-day DEX buy restriction from enableTrading()
-//    DappStakeRouter is the ONLY authorized DEX buyer during the restriction window.
-//    It swaps USDT→AIEF and immediately stakes for the user. No direct DEX buys.
-//  • Fee exemption registry — finalized before enableTrading(), frozen after.
-//    All exemptions must be set before trading is enabled — setExempt() and
-//    removeExempt() revert once tradingEnabled == true.
-//
-//  ── EXEMPTION MODEL ─────────────────────────────────────────────────────────
-//  Two independent flags per address:
-//    burnExempt : exempt from 0.5% transfer burn — exact amounts always delivered.
-//                 Required for all protocol contracts that custody or route tokens.
-//    dexExempt  : exempt from 180-day DEX buy restriction — can buy from dexPair.
-//                 ONLY DappStakeRouter should have dexExempt=true.
-//                 No other protocol contract buys from the DEX.
-//
-//  Deployment exemptions (set before enableTrading(), frozen after):
-//    DappStakeRouter           burnExempt=true  dexExempt=true   ← sole DEX buyer
-//    StakingContract           burnExempt=true  dexExempt=false
-//    StakingRewardsPool        burnExempt=true  dexExempt=false
-//    FounderAllocationContract burnExempt=true  dexExempt=false
-//    EcosystemPaymentContract  burnExempt=true  dexExempt=false
-//    LP Accumulator Wallet     burnExempt=true  dexExempt=false
-//    Founder Pool Wallet       burnExempt=true  dexExempt=false
-//    Treasury Safe             burnExempt=true  dexExempt=false  ← all treasury outflows need exact amounts
-//    Ops Safe                  burnExempt=true  dexExempt=false  (no DEX buying role)
-//
-//  No user wallet is ever permanently exempt.
-//
-//  ── WHAT THIS CONTRACT DOES NOT CONTAIN ────────────────────────────────────
-//  • NO auto-LP engine / swap logic / router calls / addLiquidity
-//  • NO burnFrom() — no external contract has supply-reducing burn permission
-//  • LP share routes to lpAccumulatorWallet as a plain transfer only
-//  • NO _entropyLiquidityEngine or any auto-swap mechanism
-//  • NO pause, blacklist, tax setters, max wallet, max transaction, rescue/drain
-//
-//  ── BURN TERMINOLOGY (canonical — use in all code, tests, comments) ─────────
-//  • _burn()      = supply-reducing. AIEFToken-internal only. Reduces totalSupply().
-//  • DEAD routing = transfer to DEAD wallet. Does NOT reduce totalSupply().
-//                   Used by sell-tax burn share after floor, StakingContract
-//                   exit deductions, and EcosystemPaymentContract fee splits.
-//  • Correct  : "sell-tax burn share routes to DEAD wallet after floor"
-//  • Incorrect : "StakingContract burns tokens"
-// ════════════════════════════════════════════════════════════════════════════════
-
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  AIEFToken
-// ─────────────────────────────────────────────────────────────────────────────
-
 contract AIEFToken is ERC20, Ownable {
-
     // ── CONSTANTS ────────────────────────────────────────────────────────────
     // All immutable after deployment. Cannot be changed even by owner.
 
@@ -94,10 +22,10 @@ contract AIEFToken is ERC20, Ownable {
     ///         remainder (tax - burnAmt - rewardsAmt - founderAmt) to guarantee no
     ///         integer-division dust is ever stranded in the contract. The constant
     ///         documents the intended economic split; the remainder ensures exact delivery.
-    uint16 public constant SELL_BURN_BPS     = 2500; // 25% of tax → burn logic
-    uint16 public constant SELL_REWARDS_BPS  = 2500; // 25% of tax → rewardsPool
-    uint16 public constant SELL_LP_BPS       = 2500; // 25% of tax → lpAccumulatorWallet (remainder in practice)
-    uint16 public constant SELL_FOUNDER_BPS  = 2500; // 25% of tax → founderPoolWallet
+    uint16 public constant SELL_BURN_BPS = 2500; // 25% of tax → burn logic
+    uint16 public constant SELL_REWARDS_BPS = 2500; // 25% of tax → rewardsPool
+    uint16 public constant SELL_LP_BPS = 2500; // 25% of tax → lpAccumulatorWallet (remainder in practice)
+    uint16 public constant SELL_FOUNDER_BPS = 2500; // 25% of tax → founderPoolWallet
 
     /// @notice Transfer burn: 0.5% deducted from every non-exempt transfer.
     ///         BEHAVIOUR AT FLOOR: stops entirely — full amount transferred, nothing
@@ -228,7 +156,11 @@ contract AIEFToken is ERC20, Ownable {
 
     /// @notice Emitted whenever an exemption is added or removed.
     ///         (false, false) = both exemptions removed (removeExempt).
-    event ExemptionUpdated(address indexed addr, bool burnExempt, bool dexExempt);
+    event ExemptionUpdated(
+        address indexed addr,
+        bool burnExempt,
+        bool dexExempt
+    );
 
     /// @notice Emitted exactly once when totalSupply() first reaches BURN_FLOOR.
     ///         After this event, supply-reducing burns (_burn()) cease permanently.
@@ -266,17 +198,23 @@ contract AIEFToken is ERC20, Ownable {
         address founderPoolWallet_,
         address lpAccumulatorWallet_
     ) ERC20("AIEF", "AIEF") {
-        require(founderPoolWallet_   != address(0), "AIEF: zero founder pool");
+        require(founderPoolWallet_ != address(0), "AIEF: zero founder pool");
         require(lpAccumulatorWallet_ != address(0), "AIEF: zero LP wallet");
         // code.length checks: both are permanent irrevocable destinations receiving
         // 1% of every sell forever. EOA addresses would pass the zero-check but have
         // no recovery path after renounce. Gnosis Safes have code; EOAs do not.
-        require(founderPoolWallet_.code.length   > 0, "AIEF: founder pool must be contract");
-        require(lpAccumulatorWallet_.code.length > 0, "AIEF: LP wallet must be contract");
+        require(
+            founderPoolWallet_.code.length > 0,
+            "AIEF: founder pool must be contract"
+        );
+        require(
+            lpAccumulatorWallet_.code.length > 0,
+            "AIEF: LP wallet must be contract"
+        );
 
-        founderPoolWallet   = founderPoolWallet_;
+        founderPoolWallet = founderPoolWallet_;
         lpAccumulatorWallet = lpAccumulatorWallet_;
-        deploymentWallet    = msg.sender; // immutable — permanent on-chain record
+        deploymentWallet = msg.sender; // immutable — permanent on-chain record
 
         // Deployer receives full supply and distributes per deployment sequence:
         //   400M → StakingRewardsPool
@@ -294,7 +232,11 @@ contract AIEFToken is ERC20, Ownable {
         // Emit permanent record of the two immutable fee destination addresses.
         // These are the most permanent addresses in the contract — visible on BSCScan
         // event log without manual constructor calldata decoding.
-        emit TokenDeployed(founderPoolWallet_, lpAccumulatorWallet_, msg.sender);
+        emit TokenDeployed(
+            founderPoolWallet_,
+            lpAccumulatorWallet_,
+            msg.sender
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -310,8 +252,8 @@ contract AIEFToken is ERC20, Ownable {
     ///         with no recovery mechanism after ownership is renounced.
     function setStakingRewardsPool(address pool) external onlyOwner {
         require(rewardsPool == address(0), "AIEF: already set");
-        require(pool        != address(0), "AIEF: zero address");
-        require(pool.code.length > 0,      "AIEF: pool must be a contract");
+        require(pool != address(0), "AIEF: zero address");
+        require(pool.code.length > 0, "AIEF: pool must be a contract");
         rewardsPool = pool;
         emit RewardsPoolSet(pool);
     }
@@ -331,14 +273,23 @@ contract AIEFToken is ERC20, Ownable {
     ///
     ///         ⚠ Requires the address to be a deployed contract (code.length > 0).
     function setDexPair(address pair) external onlyOwner {
-        require(dexPair == address(0),         "AIEF: pair already set");
-        require(pair    != address(0),         "AIEF: zero address");
-        require(pair.code.length > 0,          "AIEF: pair must be a contract");
-        require(!isTransferBurnExempt[pair],   "AIEF: pair cannot be burn-exempt");
-        require(!isDexRestrictionExempt[pair], "AIEF: pair cannot be dex-exempt");
-        require(pair != founderPoolWallet,     "AIEF: pair cannot be founder pool");
-        require(pair != lpAccumulatorWallet,   "AIEF: pair cannot be LP accumulator");
-        require(pair != rewardsPool,           "AIEF: pair cannot be rewards pool");
+        require(dexPair == address(0), "AIEF: pair already set");
+        require(pair != address(0), "AIEF: zero address");
+        require(pair.code.length > 0, "AIEF: pair must be a contract");
+        require(
+            !isTransferBurnExempt[pair],
+            "AIEF: pair cannot be burn-exempt"
+        );
+        require(
+            !isDexRestrictionExempt[pair],
+            "AIEF: pair cannot be dex-exempt"
+        );
+        require(pair != founderPoolWallet, "AIEF: pair cannot be founder pool");
+        require(
+            pair != lpAccumulatorWallet,
+            "AIEF: pair cannot be LP accumulator"
+        );
+        require(pair != rewardsPool, "AIEF: pair cannot be rewards pool");
         dexPair = pair;
         emit DexPairSet(pair);
     }
@@ -382,7 +333,11 @@ contract AIEFToken is ERC20, Ownable {
         _setExempt(addr, false, false);
     }
 
-    function _setExempt(address addr, bool burnExempt, bool dexExempt) internal {
+    function _setExempt(
+        address addr,
+        bool burnExempt,
+        bool dexExempt
+    ) internal {
         // ⚠ SECURITY: The DEX pair must never be marked exempt.
         // Exempting the pair would allow any seller to bypass the 4% sell tax
         // by routing through an exempt-flagged pair address.
@@ -395,7 +350,7 @@ contract AIEFToken is ERC20, Ownable {
                 "AIEF: dexPair cannot be exempt"
             );
         }
-        isTransferBurnExempt[addr]   = burnExempt;
+        isTransferBurnExempt[addr] = burnExempt;
         isDexRestrictionExempt[addr] = dexExempt;
         emit ExemptionUpdated(addr, burnExempt, dexExempt);
     }
@@ -426,14 +381,14 @@ contract AIEFToken is ERC20, Ownable {
     ///         The 180-day restriction begins from block.timestamp at THIS call,
     ///         not from token deployment. Cannot be extended after renounce.
     function enableTrading() external onlyOwner {
-        require(!tradingEnabled,           "AIEF: already enabled");
+        require(!tradingEnabled, "AIEF: already enabled");
         require(rewardsPool != address(0), "AIEF: rewardsPool not set");
-        require(dexPair     != address(0), "AIEF: dexPair not set");
+        require(dexPair != address(0), "AIEF: dexPair not set");
 
         // Enforce that the deployer's temporary exemptions have been removed.
         require(
             !isTransferBurnExempt[deploymentWallet] &&
-            !isDexRestrictionExempt[deploymentWallet],
+                !isDexRestrictionExempt[deploymentWallet],
             "AIEF: deployer exemption not removed"
         );
 
@@ -445,7 +400,7 @@ contract AIEFToken is ERC20, Ownable {
             "AIEF: deployer must hold zero tokens"
         );
 
-        tradingEnabled     = true;
+        tradingEnabled = true;
         restrictionEndTime = block.timestamp + RESTRICTION_PERIOD;
 
         emit TradingEnabled(restrictionEndTime);
@@ -498,7 +453,7 @@ contract AIEFToken is ERC20, Ownable {
         uint256 amount
     ) internal override {
         require(from != address(0), "AIEF: transfer from zero");
-        require(to   != address(0), "AIEF: transfer to zero");
+        require(to != address(0), "AIEF: transfer to zero");
 
         // ── ZERO-VALUE BYPASS ────────────────────────────────────────────────
         // Route all zero-value transfers directly to the base implementation,
@@ -556,11 +511,11 @@ contract AIEFToken is ERC20, Ownable {
             // requires them and they are immutable. No runtime guards needed for those two.
             require(rewardsPool != address(0), "AIEF: rewardsPool not set");
 
-            uint256 tax         = (amount * SELL_TAX_BPS)     / BPS_DENOMINATOR;
-            uint256 burnAmt     = (tax    * SELL_BURN_BPS)     / BPS_DENOMINATOR; // 1% of trade
-            uint256 rewardsAmt  = (tax    * SELL_REWARDS_BPS)  / BPS_DENOMINATOR; // 1% of trade
-            uint256 founderAmt  = (tax    * SELL_FOUNDER_BPS)  / BPS_DENOMINATOR; // 1% of trade
-            uint256 lpAmt       = tax - burnAmt - rewardsAmt - founderAmt; // remainder ~1%
+            uint256 tax = (amount * SELL_TAX_BPS) / BPS_DENOMINATOR;
+            uint256 burnAmt = (tax * SELL_BURN_BPS) / BPS_DENOMINATOR; // 1% of trade
+            uint256 rewardsAmt = (tax * SELL_REWARDS_BPS) / BPS_DENOMINATOR; // 1% of trade
+            uint256 founderAmt = (tax * SELL_FOUNDER_BPS) / BPS_DENOMINATOR; // 1% of trade
+            uint256 lpAmt = tax - burnAmt - rewardsAmt - founderAmt; // remainder ~1%
 
             // ── SELL-TAX BURN SHARE ──────────────────────────────────────────
             // Before 200M floor : _burn() — reduces totalSupply() (supply-reducing)
@@ -574,9 +529,9 @@ contract AIEFToken is ERC20, Ownable {
             }
 
             // Route remaining three sell-tax shares
-            super._transfer(from, founderPoolWallet,    founderAmt);
-            super._transfer(from, rewardsPool,          rewardsAmt);
-            super._transfer(from, lpAccumulatorWallet,  lpAmt);
+            super._transfer(from, founderPoolWallet, founderAmt);
+            super._transfer(from, rewardsPool, rewardsAmt);
+            super._transfer(from, lpAccumulatorWallet, lpAmt);
 
             // Apply 0.5% transfer burn to the 96% net that goes to PancakeSwap pool.
             // TRANSFER BURN BEHAVIOUR AT FLOOR: stops entirely (see _applyTransferBurn).
@@ -614,7 +569,7 @@ contract AIEFToken is ERC20, Ownable {
         uint256 amount
     ) internal {
         uint256 requestedBurn = (amount * TRANSFER_BURN_BPS) / BPS_DENOMINATOR;
-        uint256 actualBurn    = _burnFromSupply(from, requestedBurn);
+        uint256 actualBurn = _burnFromSupply(from, requestedBurn);
         // If at floor: actualBurn == 0, full amount transferred — no DEAD routing
         super._transfer(from, to, amount - actualBurn);
     }
@@ -624,11 +579,9 @@ contract AIEFToken is ERC20, Ownable {
     ///
     /// @param requested Amount we want to burn
     /// @return The actual burnable amount (may be less than requested near the floor)
-    function _availableBurnAmount(uint256 requested)
-        internal
-        view
-        returns (uint256)
-    {
+    function _availableBurnAmount(
+        uint256 requested
+    ) internal view returns (uint256) {
         uint256 supply = totalSupply();
         if (supply <= BURN_FLOOR) return 0;
         uint256 maxBurn = supply - BURN_FLOOR;
@@ -645,10 +598,10 @@ contract AIEFToken is ERC20, Ownable {
     /// @param from      Address to burn from
     /// @param requested Amount to attempt to burn
     /// @return burned   Actual amount burned
-    function _burnFromSupply(address from, uint256 requested)
-        internal
-        returns (uint256 burned)
-    {
+    function _burnFromSupply(
+        address from,
+        uint256 requested
+    ) internal returns (uint256 burned) {
         burned = _availableBurnAmount(requested);
         if (burned == 0) return 0;
 

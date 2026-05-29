@@ -81,11 +81,7 @@ contract DeployMainnetScript is Script {
     address public pair;
 
     function run() public {
-        address BACKEND_SIGNER = vm.envOr("BACKEND_SIGNER", address(0));
-        require(
-            BACKEND_SIGNER != address(0),
-            "Prerequisite Error: BACKEND_SIGNER environment variable not set in .env!"
-        );
+        address BACKEND_SIGNER = 0xCB6b98fA60011DC8FEEb5568fFf6a9cD74CbB34B;
 
         // Strict prerequisite checks for mainnet: verification of correct code presence
         require(

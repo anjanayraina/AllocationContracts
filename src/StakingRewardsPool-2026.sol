@@ -1,99 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.19;
-
-// ════════════════════════════════════════════════════════════════════════════════
-//  AIEF — Artificial Intelligence Entropy GamiFi
-//  CONTRACT 2 OF 6 — StakingRewardsPool.sol
-//
-//  Source authority : SC Developer Specification v1.3 (25 May 2026)
-//  BRD authority    : Business Requirements Document v1.3
-//
-//  ┌─────────────────────────────────────────────────────────────────────────┐
-//  │  Owned by Ops Safe (3-of-5 Gnosis Safe) after deployment.              │
-//  │  NOT renounced — emergency pause and signer rotation are retained.      │
-//  │  Ops Safe CANNOT extract pool balance or add any fee logic.             │
-//  └─────────────────────────────────────────────────────────────────────────┘
-//
-//  Network  : BNB Smart Chain (BSC) — Chain ID 56 / Testnet 97
-//  Solidity : 0.8.19 pinned (avoids PUSH0 opcode BSC compatibility risk)
-//  OZ       : 4.9.6 — pinned, do not upgrade without audit re-review
-//
-//  ── DEPLOYMENT CHECKLIST — VERIFY BEFORE OPENING TO USERS ──────────────────
-//  □ Transfer 400,000,000 AIEF to this contract immediately after deployment:
-//      token.transfer(address(StakingRewardsPool), 400_000_000e18)
-//    Verify: StakingRewardsPool.poolBalance() == 400_000_000e18
-//
-//  □ Confirm signer_ constructor argument is the correct backend HSM/KMS key.
-//    This key signs every reward claim. If wrong, all claims will fail with
-//    "SRP: invalid signature". Rotatable via updateSigner() but must be correct
-//    at launch to avoid disrupting users from day one.
-//
-//  □ Confirm opsSafe_ constructor argument is the correct Ops Safe address.
-//    This is the only address that can pause claims or rotate the signer.
-//    Cannot be changed after deployment — immutable.
-//
-//  □ StakingRewardsPool is transfer-burn exempt in AIEFToken:
-//      token.setExempt(address(StakingRewardsPool), true, false)
-//    burnExempt=true: reward payouts arrive at users without 0.5% burn deduction.
-//    dexExempt=false: this contract never buys from the DEX.
-//
-//  ── WHAT THIS CONTRACT DOES ─────────────────────────────────────────────────
-//  • Holds 400,000,000 AIEF (80% of total supply) — the Participant Rewards
-//    & Incentive Pool
-//  • Pays staking ROI, referral income, and all participant rewards via
-//    EIP-712 signed claims
-//  • Stage 2 withdrawal fee: ZERO — user receives 100% of signed amount
-//  • Per-user monotonic nonce provides replay protection
-//  • Low-water-mark alert at 10M AIEF remaining (event only — never blocks)
-//
-//  ── SCOPE BOUNDARY — WHAT THIS CONTRACT DOES NOT DO ────────────────────────
-//  • NO Stage 1 deduction function of any kind
-//  • NO distributeStage1Deduction() — Stage 1 is entirely off-chain accounting
-//  • NO burnAmount, NO netAmount, NO withdrawal fee in the claim struct
-//  • NO owner function to extract or drain the pool balance
-//  • NO bulk payout function
-//  • NO fee calculation of any kind
-//
-//  Stage 1 (Income Wallet → Hot Wallet) is off-chain backend ledger accounting.
-//  The backend calculates the final net payable amount after any Stage 1
-//  deduction and signs it. This contract pays exactly what was signed.
-//
-//  ── FINAL CLAIM RULE ────────────────────────────────────────────────────────
-//  A claim succeeds only if ALL of the following hold:
-//    • claims are not paused
-//    • amount > 0
-//    • amount <= 50,000 AIEF (MAX_CLAIM_AMOUNT)
-//    • user has not claimed in the last 12 hours (CLAIM_COOLDOWN)
-//    • nonce matches userNonce[msg.sender]
-//    • issuedAt <= block.timestamp (not a future signature)
-//    • expiry > issuedAt AND expiry - issuedAt <= 1 hour
-//    • block.timestamp <= expiry (not expired)
-//    • signature recovers to the approved signer address
-//    • pool balance >= amount
-//
-//  ── EIP-712 ARCHITECTURE ────────────────────────────────────────────────────
-//  Domain    : name="AIEFStakingRewards", version="1", chainId=runtime,
-//              verifyingContract=this
-//  Struct    : Claim(address user,uint256 amount,uint256 nonce,
-//                    uint256 issuedAt,uint256 expiry)
-//  Nonce     : Per-user monotonically increasing counter. Starts at 0.
-//              Incremented BEFORE token transfer (CEI pattern).
-//  Validity  : expiry - issuedAt <= MAX_SIGNATURE_VALIDITY (1 hour total window).
-//              Measured from issuance time, not submission time. Prevents a
-//              long-lived signature from passing a remaining-time check in its
-//              final hour. Backend should target ~15 minutes; 1 hour is a ceiling.
-//  Fee       : Zero. User receives 100% of amount. No burnAmount. No deductions.
-// ════════════════════════════════════════════════════════════════════════════════
-
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  StakingRewardsPool
-// ─────────────────────────────────────────────────────────────────────────────
 
 contract StakingRewardsPool is ReentrancyGuard, EIP712 {
     using SafeERC20 for IERC20;
@@ -110,9 +21,10 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
     ///           Claim(address user,uint256 amount,uint256 nonce,uint256 issuedAt,uint256 expiry)
     ///         Field order must match abi.encode order in claimReward() exactly.
     ///         Any change to field names, types, or order invalidates all existing signatures.
-    bytes32 public constant CLAIM_TYPEHASH = keccak256(
-        "Claim(address user,uint256 amount,uint256 nonce,uint256 issuedAt,uint256 expiry)"
-    );
+    bytes32 public constant CLAIM_TYPEHASH =
+        keccak256(
+            "Claim(address user,uint256 amount,uint256 nonce,uint256 issuedAt,uint256 expiry)"
+        );
 
     /// @notice Maximum permitted signature validity window, measured from issuedAt to expiry.
     ///         Enforced in claimReward(): expiry - issuedAt <= MAX_SIGNATURE_VALIDITY.
@@ -199,10 +111,7 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
 
     /// @notice Emitted when the backend signing key is rotated.
     ///         Old key is invalid immediately after this event.
-    event SignerUpdated(
-        address indexed oldSigner,
-        address indexed newSigner
-    );
+    event SignerUpdated(address indexed oldSigner, address indexed newSigner);
 
     // ── MODIFIER ─────────────────────────────────────────────────────────────
 
@@ -231,15 +140,15 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         address opsSafe_,
         address signer_
     ) EIP712("AIEFStakingRewards", "1") {
-        require(token_   != address(0), "SRP: zero token");
+        require(token_ != address(0), "SRP: zero token");
         require(opsSafe_ != address(0), "SRP: zero ops safe");
-        require(signer_  != address(0), "SRP: zero signer");
-        require(token_.code.length   > 0, "SRP: token must be a contract");
+        require(signer_ != address(0), "SRP: zero signer");
+        require(token_.code.length > 0, "SRP: token must be a contract");
         require(opsSafe_.code.length > 0, "SRP: ops safe must be a contract");
 
-        token   = IERC20(token_);
+        token = IERC20(token_);
         opsSafe = opsSafe_;
-        signer  = signer_;
+        signer = signer_;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -290,14 +199,14 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
     ) external nonReentrant {
         // ── CHECKS ───────────────────────────────────────────────────────────
 
-        require(!claimsPaused,                    "SRP: claims paused");
+        require(!claimsPaused, "SRP: claims paused");
 
         // Timestamp validity: issuedAt must not be in the future (clock skew guard)
-        require(issuedAt <= block.timestamp,       "SRP: issued in future");
+        require(issuedAt <= block.timestamp, "SRP: issued in future");
 
         // Expiry must be after issuance — guards the subtraction below against underflow
         // and rejects logically invalid signatures where expiry <= issuedAt
-        require(expiry > issuedAt,                 "SRP: invalid expiry");
+        require(expiry > issuedAt, "SRP: invalid expiry");
 
         // Total validity window measured from issuedAt to expiry.
         // Using issuedAt instead of block.timestamp prevents a signature issued
@@ -308,7 +217,7 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         );
 
         // Signature must not have expired at submission time
-        require(block.timestamp <= expiry,         "SRP: signature expired");
+        require(block.timestamp <= expiry, "SRP: signature expired");
 
         // Per-wallet cooldown: minimum 12 hours between successive claims.
         // Aligns with the staking ROI cron cycle — no legitimate user needs
@@ -318,12 +227,12 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
             "SRP: claim cooldown active"
         );
 
-        require(nonce == userNonce[msg.sender],    "SRP: invalid nonce");
-        require(amount > 0,                        "SRP: zero amount");
+        require(nonce == userNonce[msg.sender], "SRP: invalid nonce");
+        require(amount > 0, "SRP: zero amount");
 
         // Per-claim cap: limits damage from backend bugs, decimal errors,
         // or signer compromise. Larger payouts must be split across multiple claims.
-        require(amount <= MAX_CLAIM_AMOUNT,        "SRP: claim too large");
+        require(amount <= MAX_CLAIM_AMOUNT, "SRP: claim too large");
 
         require(
             token.balanceOf(address(this)) >= amount,
@@ -334,14 +243,16 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         // Build the EIP-712 digest using the OZ EIP712 base contract.
         // _hashTypedDataV4 handles domain separator (name, version, chainId,
         // verifyingContract) — no manual domain separator needed.
-        bytes32 structHash = keccak256(abi.encode(
-            CLAIM_TYPEHASH,
-            msg.sender,   // user — must be the caller, not an arbitrary address
-            amount,
-            nonce,
-            issuedAt,
-            expiry
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                CLAIM_TYPEHASH,
+                msg.sender, // user — must be the caller, not an arbitrary address
+                amount,
+                nonce,
+                issuedAt,
+                expiry
+            )
+        );
         bytes32 digest = _hashTypedDataV4(structHash);
 
         address recovered = ECDSA.recover(digest, signature);
@@ -396,7 +307,7 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
     /// @param newSigner New backend signing address (open item O10)
     function updateSigner(address newSigner) external onlyOpsSafe {
         require(newSigner != address(0), "SRP: zero signer");
-        require(newSigner != signer,     "SRP: same signer");
+        require(newSigner != signer, "SRP: same signer");
         address oldSigner = signer;
         signer = newSigner;
         emit SignerUpdated(oldSigner, newSigner);
@@ -451,14 +362,9 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         uint256 issuedAt,
         uint256 expiry
     ) external view returns (bytes32 digest) {
-        bytes32 structHash = keccak256(abi.encode(
-            CLAIM_TYPEHASH,
-            user,
-            amount,
-            nonce,
-            issuedAt,
-            expiry
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(CLAIM_TYPEHASH, user, amount, nonce, issuedAt, expiry)
+        );
         return _hashTypedDataV4(structHash);
     }
 }
