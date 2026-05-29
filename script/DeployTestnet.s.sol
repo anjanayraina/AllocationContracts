@@ -69,6 +69,7 @@ contract DeployTestnetScript is Script {
         // Ensure we broadcast using actual private key loaded from environment
         uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0));
         require(deployerPrivateKey != 0, "DeployTestnet: PRIVATE_KEY env var not set");
+        address deployerAddress = vm.addr(deployerPrivateKey);
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -154,7 +155,7 @@ contract DeployTestnetScript is Script {
             usdtLiquidity,
             0,
             0,
-            msg.sender,
+            deployerAddress,
             block.timestamp + 10 minutes
         );
 
@@ -164,7 +165,7 @@ contract DeployTestnetScript is Script {
         
         // Transfer exactly remaining deployer balance to Treasury Safe
         // This clears out Deployer's balance to exactly zero as strictly required!
-        uint256 deployerRemaining = token.balanceOf(msg.sender);
+        uint256 deployerRemaining = token.balanceOf(deployerAddress);
         if (deployerRemaining > 0) {
             token.transfer(TREASURY_SAFE, deployerRemaining);
         }
@@ -188,7 +189,7 @@ contract DeployTestnetScript is Script {
         token.setExempt(OPS_SAFE_705, true, false);
 
         // Remove deployer exemption (must be the last exemption call)
-        token.removeExempt(msg.sender);
+        token.removeExempt(deployerAddress);
 
         // Note: Step 12 requires calls from the OPS_SAFE multisig. Since EOA cannot
         // call these, we log them for manual execution post-deployment (see console outputs).
@@ -216,9 +217,9 @@ contract DeployTestnetScript is Script {
         require(token.isTransferBurnExempt(TREASURY_SAFE) == true, "Assert: Treasury Safe transferBurnExempt");
         require(token.isTransferBurnExempt(OPS_SAFE_7D5) == true, "Assert: Ops Safe 7D5 transferBurnExempt");
         require(token.isTransferBurnExempt(OPS_SAFE_705) == true, "Assert: Ops Safe 705 transferBurnExempt");
-        require(token.isTransferBurnExempt(msg.sender) == false, "Assert: Deployer not burn exempt");
-        require(token.isDexRestrictionExempt(msg.sender) == false, "Assert: Deployer not dex exempt");
-        require(token.balanceOf(msg.sender) == 0, "Assert: Deployer EOA balance is 0");
+        require(token.isTransferBurnExempt(deployerAddress) == false, "Assert: Deployer not burn exempt");
+        require(token.isDexRestrictionExempt(deployerAddress) == false, "Assert: Deployer not dex exempt");
+        require(token.balanceOf(deployerAddress) == 0, "Assert: Deployer EOA balance is 0");
 
         // StakingRewardsPool Assertions
         require(rewardsPool.poolBalance() == 400_000_000e18, "Assert: rewards pool balance is 400M");

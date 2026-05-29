@@ -74,6 +74,36 @@ contract MockPancakeRouter {
     }
 }
 
+contract MockUSDT {
+    string public name = "Mock USDT";
+    string public symbol = "USDT";
+    uint8 public decimals = 18;
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+}
+
 contract DeployLocalForkScript is Script {
     // 1.1 Confirmed Wallet Addresses — Checked and checksummed for Solidity compilation
     address public constant DEPLOYER_EOA = 0x4E9cAc333B4Fc2B11a5cbAcd7e855a452F840308;
@@ -106,21 +136,32 @@ contract DeployLocalForkScript is Script {
         // for safes that are required to be contracts in the constructors.
         bytes memory mockCode = address(new MockGnosisSafe()).code;
         
-        vm.etch(LP_ACCUMULATOR_WALLET, mockCode);
-        vm.etch(FOUNDER_POOL_WALLET, mockCode);
-        vm.etch(OPS_SAFE_705, mockCode);
-        vm.etch(OPS_SAFE_7D5, mockCode);
-        vm.etch(TREASURY_SAFE, mockCode);
-        vm.etch(BSC_USDT, mockCode);
+        if (LP_ACCUMULATOR_WALLET.code.length == 0) vm.etch(LP_ACCUMULATOR_WALLET, mockCode);
+        if (FOUNDER_POOL_WALLET.code.length == 0) vm.etch(FOUNDER_POOL_WALLET, mockCode);
+        if (OPS_SAFE_705.code.length == 0) vm.etch(OPS_SAFE_705, mockCode);
+        if (OPS_SAFE_7D5.code.length == 0) vm.etch(OPS_SAFE_7D5, mockCode);
+        if (TREASURY_SAFE.code.length == 0) vm.etch(TREASURY_SAFE, mockCode);
+        
+        if (BSC_USDT.code.length == 0) {
+            vm.etch(BSC_USDT, address(new MockUSDT()).code);
+            uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+            address deployerAddr = vm.addr(deployerPrivateKey);
+            MockUSDT(BSC_USDT).mint(deployerAddr, 1_000_000e18);
+            MockUSDT(BSC_USDT).mint(msg.sender, 1_000_000e18);
+            MockUSDT(BSC_USDT).mint(0xF977814e90dA44bFA03b6295A0616a897441aceC, 1_000_000e18);
+        }
 
         // Etch Mock Pancake Factory and Router to satisfy DappStakeRouter and liquidity seeding
-        address mockPair = address(new MockGnosisSafe());
-        address mockFactory = address(new MockPancakeFactory(mockPair));
-        address mockRouter = address(new MockPancakeRouter(mockFactory));
-        vm.etch(PANCAKESWAP_V2_ROUTER, mockRouter.code);
+        if (PANCAKESWAP_V2_ROUTER.code.length == 0) {
+            address mockPair = address(new MockGnosisSafe());
+            address mockFactory = address(new MockPancakeFactory(mockPair));
+            address mockRouter = address(new MockPancakeRouter(mockFactory));
+            vm.etch(PANCAKESWAP_V2_ROUTER, mockRouter.code);
+        }
 
         // Ensure we broadcast under deployer EOA address/private key
         uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+        address deployerAddress = vm.addr(deployerPrivateKey);
         
         vm.startBroadcast(deployerPrivateKey);
 
@@ -184,7 +225,7 @@ contract DeployLocalForkScript is Script {
         token.transfer(address(founderAlloc), 25_000_000e18); // 5% Founders Pool
         
         // Transfer exactly remaining deployer balance to Treasury Safe
-        uint256 deployerRemaining = token.balanceOf(msg.sender);
+        uint256 deployerRemaining = token.balanceOf(deployerAddress);
         if (deployerRemaining > 0) {
             token.transfer(TREASURY_SAFE, deployerRemaining);
         }
@@ -207,13 +248,13 @@ contract DeployLocalForkScript is Script {
             pair = IPancakeFactory(factory).createPair(address(token), BSC_USDT);
         }
 
-        // If local fork has USDT for msg.sender, we approve and add liquidity
+        // If local fork has USDT for deployerAddress, we approve and add liquidity
         // Otherwise, in standard script runs, this would proceed or simulate
         // Let's do a safe transfer/approval check by pranking a USDT whale on the fork:
         vm.stopBroadcast();
         address usdtWhale = 0xF977814e90dA44bFA03b6295A0616a897441aceC; // Binance Hot Wallet 20 on BSC
         vm.prank(usdtWhale);
-        IERC20(BSC_USDT).transfer(msg.sender, usdtLiquidity);
+        IERC20(BSC_USDT).transfer(deployerAddress, usdtLiquidity);
         vm.startBroadcast(deployerPrivateKey);
 
         IERC20(BSC_USDT).approve(PANCAKESWAP_V2_ROUTER, usdtLiquidity);
@@ -224,7 +265,7 @@ contract DeployLocalForkScript is Script {
             usdtLiquidity,
             0,
             0,
-            msg.sender,
+            deployerAddress,
             block.timestamp + 10 minutes
         );
 
@@ -247,7 +288,7 @@ contract DeployLocalForkScript is Script {
         token.setExempt(OPS_SAFE_705, true, false);
 
         // Remove deployer exemption (must be the last exemption call)
-        token.removeExempt(msg.sender);
+        token.removeExempt(deployerAddress);
 
         // Step 12 - Configure StakingContract
         vm.stopBroadcast();
@@ -283,9 +324,9 @@ contract DeployLocalForkScript is Script {
         require(token.isTransferBurnExempt(TREASURY_SAFE) == true, "Assert: Treasury Safe transferBurnExempt");
         require(token.isTransferBurnExempt(OPS_SAFE_7D5) == true, "Assert: Ops Safe 7D5 transferBurnExempt");
         require(token.isTransferBurnExempt(OPS_SAFE_705) == true, "Assert: Ops Safe 705 transferBurnExempt");
-        require(token.isTransferBurnExempt(msg.sender) == false, "Assert: Deployer not burn exempt");
-        require(token.isDexRestrictionExempt(msg.sender) == false, "Assert: Deployer not dex exempt");
-        require(token.balanceOf(msg.sender) == 0, "Assert: Deployer EOA balance is 0");
+        require(token.isTransferBurnExempt(deployerAddress) == false, "Assert: Deployer not burn exempt");
+        require(token.isDexRestrictionExempt(deployerAddress) == false, "Assert: Deployer not dex exempt");
+        require(token.balanceOf(deployerAddress) == 0, "Assert: Deployer EOA balance is 0");
 
         // StakingRewardsPool Assertions
         require(rewardsPool.poolBalance() == 400_000_000e18, "Assert: rewards pool balance is 400M");
