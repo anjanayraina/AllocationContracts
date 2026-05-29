@@ -36,45 +36,7 @@ interface IERC20 {
     function transfer(address recipient, uint256 amount) external returns (bool);
 }
 
-// Simple contract to act as Gnosis Safe mock for code.length > 0 checks
-contract MockGnosisSafe {}
-
-contract MockPancakeFactory {
-    address public immutable pair;
-    constructor(address _pair) {
-        pair = _pair;
-    }
-    function getPair(address, address) external view returns (address) {
-        return pair;
-    }
-    function createPair(address, address) external view returns (address) {
-        return pair;
-    }
-}
-
-contract MockPancakeRouter {
-    address public immutable factoryAddr;
-    constructor(address _factory) {
-        factoryAddr = _factory;
-    }
-    function factory() external view returns (address) {
-        return factoryAddr;
-    }
-    function addLiquidity(
-        address,
-        address,
-        uint256,
-        uint256,
-        uint256,
-        uint256,
-        address,
-        uint256
-    ) external pure returns (uint256, uint256, uint256) {
-        return (0, 0, 0);
-    }
-}
-
-contract DeployLocalForkScript is Script {
+contract DeployTestnetScript is Script {
     // 1.1 Confirmed Wallet Addresses — Checked and checksummed for Solidity compilation
     address public constant DEPLOYER_EOA = 0x4E9cAc333B4Fc2B11a5cbAcd7e855a452F840308;
     address public constant LP_ACCUMULATOR_WALLET = 0xFA5830a4a1394ab6A02B876c559F20593f3Cb2c3;
@@ -87,9 +49,11 @@ contract DeployLocalForkScript is Script {
     address public constant TREASURY_SAFE = 0x16e50530Ca7FcDbe5eaEaB584CC48af828929030;
     address public constant BACKEND_SIGNER = 0x9999999999999999999999999999999999999999; // Placeholder Open Item 010
 
-    // 1.2 Fixed BSC Addresses (BSC Mainnet Fork Compatibility)
-    address public constant PANCAKESWAP_V2_ROUTER = 0x10eD43c718714eb63d5aa57878854704E256024E;
-    address public constant BSC_USDT = 0x55d398326f99059fF775485246999027B3197955;
+    // 1.2 Fixed BSC Testnet (Chain ID 97) Addresses
+    // Official PancakeSwap V2 Router on BSC Testnet
+    address public constant PANCAKESWAP_V2_ROUTER = 0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3;
+    // Common Mock USDT Contract on BSC Testnet
+    address public constant BSC_USDT = 0x337610d27c682E347C9cD60BD4b3b107C9d34dDd;
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     // Contracts
@@ -102,30 +66,14 @@ contract DeployLocalForkScript is Script {
     address public pair;
 
     function run() public {
-        // Setup local fork environment via vm.etch to satisfy .code.length > 0 checks
-        // for safes that are required to be contracts in the constructors.
-        bytes memory mockCode = address(new MockGnosisSafe()).code;
-        
-        vm.etch(LP_ACCUMULATOR_WALLET, mockCode);
-        vm.etch(FOUNDER_POOL_WALLET, mockCode);
-        vm.etch(OPS_SAFE_705, mockCode);
-        vm.etch(OPS_SAFE_7D5, mockCode);
-        vm.etch(TREASURY_SAFE, mockCode);
-        vm.etch(BSC_USDT, mockCode);
+        // Ensure we broadcast using actual private key loaded from environment
+        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0));
+        require(deployerPrivateKey != 0, "DeployTestnet: PRIVATE_KEY env var not set");
 
-        // Etch Mock Pancake Factory and Router to satisfy DappStakeRouter and liquidity seeding
-        address mockPair = address(new MockGnosisSafe());
-        address mockFactory = address(new MockPancakeFactory(mockPair));
-        address mockRouter = address(new MockPancakeRouter(mockFactory));
-        vm.etch(PANCAKESWAP_V2_ROUTER, mockRouter.code);
-
-        // Ensure we broadcast under deployer EOA address/private key
-        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
-        
         vm.startBroadcast(deployerPrivateKey);
 
         // ════════════════════════════════════════════════════════════════════════════════
-        // PART 2 - DEPLOYMENT SEQUENCE
+        // PART 2 - DEPLOYMENT SEQUENCE (NO VM CHEATCODES / PRANKS FOR LIVE TESTNET)
         // ════════════════════════════════════════════════════════════════════════════════
 
         // Step 1 - Deploy AIEFToken
@@ -179,43 +127,25 @@ contract DeployLocalForkScript is Script {
             OPS_SAFE_705
         );
 
-        // Step 7 - Distribute Token Allocations
-        token.transfer(address(rewardsPool), 400_000_000e18); // 80% Rewards Pool
-        token.transfer(address(founderAlloc), 25_000_000e18); // 5% Founders Pool
-        
-        // Transfer exactly remaining deployer balance to Treasury Safe
-        uint256 deployerRemaining = token.balanceOf(msg.sender);
-        if (deployerRemaining > 0) {
-            token.transfer(TREASURY_SAFE, deployerRemaining);
-        }
-
         // Step 8 - Set StakingRewardsPool Address in AIEFToken
         token.setStakingRewardsPool(address(rewardsPool));
 
         // Step 9 - Seed PancakeSwap Liquidity and Create Pair
         // Add liquidity via PancakeSwap V2 (500k AIEF + 10,000 USDT to establish launch price)
+        // Note: Payer/Deployer EOA must already hold the required USDT on Testnet to execute this step!
         uint256 aiefLiquidity = 500_000e18;
         uint256 usdtLiquidity = 10_000e18;
 
         token.approve(PANCAKESWAP_V2_ROUTER, aiefLiquidity);
         
-        // We deal USDT to broadcast EOA so it can add liquidity on the local fork
-        // For local fork test/simulation, we fetch / create the pair dynamically
+        // Fetch or create the DEX pair dynamically on the testnet
         address factory = IPancakeRouter(PANCAKESWAP_V2_ROUTER).factory();
         pair = IPancakeFactory(factory).getPair(address(token), BSC_USDT);
         if (pair == address(0)) {
             pair = IPancakeFactory(factory).createPair(address(token), BSC_USDT);
         }
 
-        // If local fork has USDT for msg.sender, we approve and add liquidity
-        // Otherwise, in standard script runs, this would proceed or simulate
-        // Let's do a safe transfer/approval check by pranking a USDT whale on the fork:
-        vm.stopBroadcast();
-        address usdtWhale = 0xF977814e90dA44bFA03b6295A0616a897441aceC; // Binance Hot Wallet 20 on BSC
-        vm.prank(usdtWhale);
-        IERC20(BSC_USDT).transfer(msg.sender, usdtLiquidity);
-        vm.startBroadcast(deployerPrivateKey);
-
+        // Standard PancakeSwap V2 liquidity seeding (fails if EOA has insufficient USDT)
         IERC20(BSC_USDT).approve(PANCAKESWAP_V2_ROUTER, usdtLiquidity);
         IPancakeRouter(PANCAKESWAP_V2_ROUTER).addLiquidity(
             address(token),
@@ -227,6 +157,17 @@ contract DeployLocalForkScript is Script {
             msg.sender,
             block.timestamp + 10 minutes
         );
+
+        // Step 7 - Distribute Token Allocations
+        token.transfer(address(rewardsPool), 400_000_000e18); // 80% Rewards Pool
+        token.transfer(address(founderAlloc), 25_000_000e18); // 5% Founders Pool
+        
+        // Transfer exactly remaining deployer balance to Treasury Safe
+        // This clears out Deployer's balance to exactly zero as strictly required!
+        uint256 deployerRemaining = token.balanceOf(msg.sender);
+        if (deployerRemaining > 0) {
+            token.transfer(TREASURY_SAFE, deployerRemaining);
+        }
 
         // Step 10 - Register DEX Pair in AIEFToken
         token.setDexPair(pair);
@@ -249,19 +190,11 @@ contract DeployLocalForkScript is Script {
         // Remove deployer exemption (must be the last exemption call)
         token.removeExempt(msg.sender);
 
-        // Step 12 - Configure StakingContract
-        vm.stopBroadcast();
-        // Since step 12 requires OPS_SAFE caller, we prank OPS_SAFE on fork:
-        vm.startPrank(OPS_SAFE_7D5);
-        staking.setRouterCaller(address(dappRouter), true);
-        staking.setAuthorizedPlanCaller(5, address(founderAlloc), true);
-        vm.stopPrank();
-
-        // Resume Deployer EOA broadcasting
-        vm.startBroadcast(deployerPrivateKey);
+        // Note: Step 12 requires calls from the OPS_SAFE multisig. Since EOA cannot
+        // call these, we log them for manual execution post-deployment (see console outputs).
 
         // ════════════════════════════════════════════════════════════════════════════════
-        // PART 3 - PRE-FLIGHT VERIFICATION CHECKLIST (Scripted Assertions)
+        // PART 3 - PRE-FLIGHT VERIFICATION CHECKLIST (Excluding Safe role states)
         // ════════════════════════════════════════════════════════════════════════════════
         
         // Token Contract Assertions
@@ -292,10 +225,7 @@ contract DeployLocalForkScript is Script {
         require(rewardsPool.signer() == BACKEND_SIGNER, "Assert: backend signer is correct");
         require(rewardsPool.claimsPaused() == false, "Assert: claims not paused");
 
-        // StakingContract Assertions
-        require(staking.routerCallers(address(dappRouter)) == true, "Assert: dappRouter approved routerCaller");
-        require(staking.authorizedPlanCallers(5, address(founderAlloc)) == true, "Assert: founderAlloc authorized for Plan 5");
-        
+        // StakingContract General Assertions (Toggles set by Ops Safe checked later)
         {
             (, bool active0, , , ) = staking.plans(0);
             require(active0 == true, "Assert: Plan 0 is active");
@@ -356,19 +286,19 @@ contract DeployLocalForkScript is Script {
         require(token.owner() == address(0), "Assert: owner is renounced");
         require(token.restrictionEndTime() > block.timestamp, "Assert: dex restriction window active");
 
-        // Note: Step 15 transferOwnership calls are skipped for all contracts (Rewards Pool, Staking, Founder Alloc,
-        // EcosystemPayment, and DappStakeRouter) because they are controlled by immutable opsSafe addresses
-        // rather than inheriting Ownable. Ownership of the AIEFToken was already renounced in Step 14.
+        // Note: Step 15 ownership transfers for ownable contracts are skipped since core AIEF Protocol
+        // contracts do not inherit Ownable and are permanently governed by the immutable constructor params.
 
         vm.stopBroadcast();
 
         // ════════════════════════════════════════════════════════════════════════════════
-        // PART 4 - POST-DEPLOYMENT VERIFICATION
+        // POST-DEPLOYMENT VERIFICATION & LOGGING
         // ════════════════════════════════════════════════════════════════════════════════
         
-        // Print final deployed addresses for registration in contract register
-        console2.log("-----------------------------------------");
-        console2.log("AIEF Protocol Deployed Addresses:");
+        console2.log("=======================================================================");
+        console2.log("BSC TESTNET DEPLOYMENT COMPLETED SUCCESSFULLY");
+        console2.log("=======================================================================");
+        console2.log("Deployed Contract Addresses:");
         console2.log("TOKEN:             ", address(token));
         console2.log("REWARDS_POOL:      ", address(rewardsPool));
         console2.log("STAKING:           ", address(staking));
@@ -376,6 +306,35 @@ contract DeployLocalForkScript is Script {
         console2.log("ECOSYSTEM_PAYMENT: ", address(ecosystemPayment));
         console2.log("DAPP_STAKE_ROUTER: ", address(dappRouter));
         console2.log("PAIR:              ", pair);
-        console2.log("-----------------------------------------");
+        console2.log("=======================================================================");
+        console2.log("ATTENTION: YOU MUST NOW EXECUTE THESE STEP 12 CONFIGURATIONS");
+        console2.log("VIA YOUR OPS SAFE MULTISIG (address: %s):", OPS_SAFE_7D5);
+        console2.log("-----------------------------------------------------------------------");
+        console2.log("1. Call on StakingContract (%s):", address(staking));
+        console2.log("   Method: setRouterCaller(%s, true)", address(dappRouter));
+        console2.log("2. Call on StakingContract (%s):", address(staking));
+        console2.log("   Method: setAuthorizedPlanCaller(5, %s, true)", address(founderAlloc));
+        console2.log("=======================================================================");
+        console2.log("ABI-Encoded Constructor Arguments for BSCScan Verification:");
+        console2.log("-----------------------------------------------------------------------");
+        
+        console2.log("1. AIEFToken:");
+        console2.logBytes(abi.encode(FOUNDER_POOL_WALLET, LP_ACCUMULATOR_WALLET));
+        
+        console2.log("2. StakingRewardsPool:");
+        console2.logBytes(abi.encode(address(token), OPS_SAFE_705, BACKEND_SIGNER));
+        
+        console2.log("3. StakingContract:");
+        console2.logBytes(abi.encode(address(token), address(rewardsPool), OPS_SAFE_7D5, FOUNDER_POOL_WALLET, LP_ACCUMULATOR_WALLET));
+        
+        console2.log("4. FounderAllocationContract:");
+        console2.logBytes(abi.encode(address(token), address(staking), OPS_SAFE_7D5, uint8(5), uint256(500), uint256(50_000e18), block.timestamp + 180 days, TREASURY_SAFE));
+        
+        console2.log("5. EcosystemPaymentContract:");
+        console2.logBytes(abi.encode(address(token), address(rewardsPool), TREASURY_SAFE, OPS_SAFE_7D5));
+        
+        console2.log("6. DappStakeRouter:");
+        console2.logBytes(abi.encode(address(token), BSC_USDT, PANCAKESWAP_V2_ROUTER, address(staking), OPS_SAFE_705));
+        console2.log("=======================================================================");
     }
 }
