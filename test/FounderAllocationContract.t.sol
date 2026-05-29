@@ -4,7 +4,9 @@ pragma solidity 0.8.19;
 import {Test} from "forge-std/Test.sol";
 import {AIEFToken} from "../src/AIEFToken-2026.sol";
 import {StakingContract} from "../src/StakingContract-2026.sol";
-import {FounderAllocationContract} from "../src/FounderAllocationContract-2026.sol";
+import {
+    FounderAllocationContract
+} from "../src/FounderAllocationContract-2026.sol";
 
 contract FounderAllocationContractTest is Test {
     AIEFToken public token;
@@ -71,7 +73,11 @@ contract FounderAllocationContractTest is Test {
 
         // Authorize FounderAllocationContract in StakingContract for plan 5
         vm.prank(opsSafe);
-        staking.setAuthorizedPlanCaller(founderPlanId, address(founderAlloc), true);
+        staking.setAuthorizedPlanCaller(
+            founderPlanId,
+            address(founderAlloc),
+            true
+        );
     }
 
     function test_Initialization() public {
@@ -96,14 +102,25 @@ contract FounderAllocationContractTest is Test {
         assertEq(founderAlloc.founderCount(), 1);
         assertEq(founderAlloc.totalAllocated(), allocAmount);
 
-        (uint256 founderNum, uint256 allocatedAmount, uint256 positionId, uint64 registeredAt) = founderAlloc.getFounderInfo(founder1);
+        (
+            uint256 founderNum,
+            uint256 allocatedAmount,
+            uint256 positionId,
+            uint64 registeredAt
+        ) = founderAlloc.getFounderInfo(founder1);
         assertEq(founderNum, 1);
         assertEq(allocatedAmount, allocAmount);
         assertEq(positionId, 0); // first position in StakingContract for founder1
         assertEq(registeredAt, block.timestamp);
 
         // Check StakingContract record
-        (uint256 principal, uint8 planId, uint64 stakedAt, uint32 lockPeriod, bool active) = staking.getPosition(founder1, 0);
+        (
+            uint256 principal,
+            uint8 planId,
+            uint64 stakedAt,
+            uint32 lockPeriod,
+            bool active
+        ) = staking.getPosition(founder1, 0);
         assertEq(principal, allocAmount);
         assertEq(planId, founderPlanId);
         assertEq(stakedAt, block.timestamp);
@@ -155,7 +172,10 @@ contract FounderAllocationContractTest is Test {
         uint256 walletBalanceBefore = token.balanceOf(remainderWallet);
         founderAlloc.transferRemainder();
 
-        assertEq(token.balanceOf(remainderWallet), walletBalanceBefore + 100_000e18);
+        assertEq(
+            token.balanceOf(remainderWallet),
+            walletBalanceBefore + 100_000e18
+        );
         assertEq(founderAlloc.poolBalance(), 0);
         vm.stopPrank();
     }
