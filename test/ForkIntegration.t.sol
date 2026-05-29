@@ -74,126 +74,110 @@ contract ForkIntegrationTest is Test {
         // Using a highly reliable public BSC RPC Node
         bscFork = vm.createSelectFork("https://binance.llamarpc.com");
 
-        string memory path = "./deployed_addresses.json";
-        if (vm.exists(path)) {
-            // Read addresses from the JSON file
-            string memory json = vm.readFile(path);
-            
-            token = AIEFToken(vm.parseJsonAddress(json, ".token"));
-            rewardsPool = StakingRewardsPool(vm.parseJsonAddress(json, ".rewardsPool"));
-            staking = StakingContract(vm.parseJsonAddress(json, ".staking"));
-            founderAlloc = FounderAllocationContract(vm.parseJsonAddress(json, ".founderAlloc"));
-            dappRouter = DappStakeRouter(vm.parseJsonAddress(json, ".dappRouter"));
-            
-            founderPoolWallet = MockSafe(vm.parseJsonAddress(json, ".founderPoolWallet"));
-            lpAccumulatorWallet = MockSafe(vm.parseJsonAddress(json, ".lpAccumulatorWallet"));
-            opsSafe = MockSafe(vm.parseJsonAddress(json, ".opsSafe"));
-            remainderWallet = MockSafe(vm.parseJsonAddress(json, ".remainderWallet"));
-            
-            // Signer is mocksafe in standard fork integration tests
-            signer = MockSafe(address(0)); // Placeholders for signer if needed
-        } else {
-            // Deploy Gnosis Safe mock contracts
-            vm.startPrank(deployer);
-            founderPoolWallet = new MockSafe();
-            lpAccumulatorWallet = new MockSafe();
-            opsSafe = new MockSafe();
-            signer = new MockSafe();
-            remainderWallet = new MockSafe();
+        // Deploy Gnosis Safe mock contracts
+        vm.startPrank(deployer);
+        founderPoolWallet = new MockSafe();
+        lpAccumulatorWallet = new MockSafe();
+        opsSafe = new MockSafe();
+        signer = new MockSafe();
+        remainderWallet = new MockSafe();
 
-            // 1. Deploy contracts
-            token = new AIEFToken(
-                address(founderPoolWallet),
-                address(lpAccumulatorWallet)
-            );
+        // 1. Deploy contracts
+        token = new AIEFToken(
+            address(founderPoolWallet),
+            address(lpAccumulatorWallet)
+        );
 
-            rewardsPool = new StakingRewardsPool(
-                address(token),
-                address(opsSafe),
-                address(signer)
-            );
+        rewardsPool = new StakingRewardsPool(
+            address(token),
+            address(opsSafe),
+            address(signer)
+        );
 
-            staking = new StakingContract(
-                address(token),
-                address(rewardsPool),
-                address(opsSafe),
-                address(founderPoolWallet),
-                address(lpAccumulatorWallet)
-            );
+        staking = new StakingContract(
+            address(token),
+            address(rewardsPool),
+            address(opsSafe),
+            address(founderPoolWallet),
+            address(lpAccumulatorWallet)
+        );
 
-            founderAlloc = new FounderAllocationContract(
-                address(token),
-                address(staking),
-                address(opsSafe),
-                5, // planId 5
-                500, // maxFounders
-                50_000e18, // maxAllocation
-                block.timestamp + 30 days,
-                address(remainderWallet)
-            );
+        founderAlloc = new FounderAllocationContract(
+            address(token),
+            address(staking),
+            address(opsSafe),
+            5, // planId 5
+            500, // maxFounders
+            50_000e18, // maxAllocation
+            block.timestamp + 30 days,
+            address(remainderWallet)
+        );
 
-            dappRouter = new DappStakeRouter(
-                address(token),
-                USDT,
-                PANCAKE_ROUTER,
-                address(staking),
-                address(opsSafe)
-            );
+        dappRouter = new DappStakeRouter(
+            address(token),
+            USDT,
+            PANCAKE_ROUTER,
+            address(staking),
+            address(opsSafe)
+        );
 
-            // 2. Perform handshakes & configurations
-            token.setStakingRewardsPool(address(rewardsPool));
+        // 2. Perform handshakes & configurations
+        token.setStakingRewardsPool(address(rewardsPool));
 
-            address factory = IPancakeRouter02(PANCAKE_ROUTER).factory();
-            address dexPair = IPancakeFactory02(factory).createPair(address(token), USDT);
-            token.setDexPair(dexPair);
+        address factory = IPancakeRouter02(PANCAKE_ROUTER).factory();
+        address dexPair = IPancakeFactory02(factory).createPair(address(token), USDT);
+        token.setDexPair(dexPair);
 
-            // Mark contracts exempt in Token
-            token.setExempt(address(staking), true, false);
-            token.setExempt(address(dappRouter), true, true);
-            token.setExempt(address(rewardsPool), true, false);
-            token.setExempt(address(founderAlloc), true, false);
+        // Mark contracts exempt in Token
+        token.setExempt(address(staking), true, false);
+        token.setExempt(address(dappRouter), true, true);
+        token.setExempt(address(rewardsPool), true, false);
+        token.setExempt(address(founderAlloc), true, false);
 
-            // Authorize Router and FounderAllocationContract in StakingContract
-            staking.setRouterCaller(address(dappRouter), true);
-            staking.setAuthorizedPlanCaller(5, address(founderAlloc), true);
+        // Authorize Router and FounderAllocationContract in StakingContract
+        vm.stopPrank();
+        vm.prank(address(opsSafe));
+        staking.setRouterCaller(address(dappRouter), true);
+        vm.prank(address(opsSafe));
+        staking.setAuthorizedPlanCaller(5, address(founderAlloc), true);
+        vm.startPrank(deployer);
 
-            // 3. Seed PancakeSwap Liquidity (0.5M AIEF + 10,000 USDT)
-            uint256 aiefLiquidity = 500_000e18;
-            uint256 usdtLiquidity = 10_000e18;
+        // 3. Seed PancakeSwap Liquidity (0.5M AIEF + 10,000 USDT)
+        uint256 aiefLiquidity = 500_000e18;
+        uint256 usdtLiquidity = 10_000e18;
 
-            // Deal USDT to the deployer on the fork
-            deal(USDT, deployer, usdtLiquidity);
+        // Deal USDT to the deployer on the fork
+        deal(USDT, deployer, usdtLiquidity);
 
-            token.approve(PANCAKE_ROUTER, aiefLiquidity);
-            IERC20Fork(USDT).approve(PANCAKE_ROUTER, usdtLiquidity);
+        token.approve(PANCAKE_ROUTER, aiefLiquidity);
+        IERC20Fork(USDT).approve(PANCAKE_ROUTER, usdtLiquidity);
 
-            IPancakeRouter02(PANCAKE_ROUTER).addLiquidity(
-                address(token),
-                USDT,
-                aiefLiquidity,
-                usdtLiquidity,
-                0,
-                0,
-                deployer,
-                block.timestamp
-            );
+        IPancakeRouter02(PANCAKE_ROUTER).addLiquidity(
+            address(token),
+            USDT,
+            aiefLiquidity,
+            usdtLiquidity,
+            0,
+            0,
+            deployer,
+            block.timestamp
+        );
 
-            // 4. Distribute allocations to clear deployer balance
-            token.transfer(address(rewardsPool), 400_000_000e18); // 400M
-            token.transfer(address(founderAlloc), 25_000_000e18); // 25M
+        // 4. Distribute allocations to clear deployer balance
+        token.transfer(address(rewardsPool), 400_000_000e18); // 400M
+        token.transfer(address(founderAlloc), 25_000_000e18); // 25M
 
-            uint256 remainingDeployerBalance = token.balanceOf(deployer);
-            if (remainingDeployerBalance > 0) {
-                token.transfer(address(remainderWallet), remainingDeployerBalance);
-            }
-
-            // 5. Finalize token status & enable trading
-            token.removeExempt(deployer);
-            token.enableTrading();
-            token.renounceOwnership();
-
-            vm.stopPrank();
+        uint256 remainingDeployerBalance = token.balanceOf(deployer);
+        if (remainingDeployerBalance > 0) {
+            token.transfer(address(remainderWallet), remainingDeployerBalance);
         }
+
+        // 5. Finalize token status & enable trading
+        token.removeExempt(deployer);
+        token.enableTrading();
+        token.renounceOwnership();
+
+        vm.stopPrank();
     }
 
     function testFork_DexBuyRestrictionEnforcement() public {
