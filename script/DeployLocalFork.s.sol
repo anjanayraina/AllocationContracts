@@ -47,7 +47,7 @@ contract MockPancakeFactory {
     function getPair(address, address) external view returns (address) {
         return pair;
     }
-    function createPair(address, address) external view returns (address) {
+    function createPair(address, address) external returns (address) {
         return pair;
     }
 }
@@ -105,21 +105,21 @@ contract MockUSDT {
 }
 
 contract DeployLocalForkScript is Script {
-    // 1.1 Confirmed Wallet Addresses — Checked and checksummed for Solidity compilation
-    address public constant DEPLOYER_EOA = 0x4E9cAc333B4Fc2B11a5cbAcd7e855a452F840308;
-    address public constant LP_ACCUMULATOR_WALLET = 0xFA5830a4a1394ab6A02B876c559F20593f3Cb2c3;
-    address public constant FOUNDER_POOL_WALLET = 0x87725CB0C384B10a1Fb3Ec3ea80011120AE84c66;
+    // 1.1 Confirmed Wallet Addresses — Defaults configured for testnet mocks if not already deployed
+    address public DEPLOYER_EOA = 0x4E9cAc333B4Fc2B11a5cbAcd7e855a452F840308;
+    address public LP_ACCUMULATOR_WALLET = 0xFA5830a4a1394ab6A02B876c559F20593f3Cb2c3;
+    address public FOUNDER_POOL_WALLET = 0x87725CB0C384B10a1Fb3Ec3ea80011120AE84c66;
     
     // Ops Safes (Step-by-step uses two slightly different hex due to OCR errors)
-    address public constant OPS_SAFE_705 = 0x705CBCf8dBeA440674AfbAB88f8e0Fe1d9730631; // Primary & Part 6 (40-digit version)
-    address public constant OPS_SAFE_7D5 = 0x7D5cbcF8dbEa440674aFbaB88FBe0Fe1d9730631; // Steps 3, 4, 5, 11, 15
+    address public OPS_SAFE_705 = 0x705CBCf8dBeA440674AfbAB88f8e0Fe1d9730631; // Primary & Part 6 (40-digit version)
+    address public OPS_SAFE_7D5 = 0x7D5cbcF8dbEa440674aFbaB88FBe0Fe1d9730631; // Steps 3, 4, 5, 11, 15
 
-    address public constant TREASURY_SAFE = 0x16e50530Ca7FcDbe5eaEaB584CC48af828929030;
+    address public TREASURY_SAFE = 0x16e50530Ca7FcDbe5eaEaB584CC48af828929030;
     address public constant BACKEND_SIGNER = 0x9999999999999999999999999999999999999999; // Placeholder Open Item 010
 
     // 1.2 Fixed BSC Addresses (BSC Mainnet Fork Compatibility)
-    address public constant PANCAKESWAP_V2_ROUTER = 0x10eD43c718714eb63d5aa57878854704E256024E;
-    address public constant BSC_USDT = 0x55d398326f99059fF775485246999027B3197955;
+    address public PANCAKESWAP_V2_ROUTER = 0x10eD43c718714eb63d5aa57878854704E256024E;
+    address public BSC_USDT = 0x55d398326f99059fF775485246999027B3197955;
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
     // Contracts
@@ -132,44 +132,45 @@ contract DeployLocalForkScript is Script {
     address public pair;
 
     function run() public {
-        // Setup local fork environment via vm.etch to satisfy .code.length > 0 checks
-        // for safes that are required to be contracts in the constructors.
-        bytes memory mockCode = address(new MockGnosisSafe()).code;
-        
-        if (LP_ACCUMULATOR_WALLET.code.length == 0) vm.etch(LP_ACCUMULATOR_WALLET, mockCode);
-        if (FOUNDER_POOL_WALLET.code.length == 0) vm.etch(FOUNDER_POOL_WALLET, mockCode);
-        if (OPS_SAFE_705.code.length == 0) vm.etch(OPS_SAFE_705, mockCode);
-        if (OPS_SAFE_7D5.code.length == 0) vm.etch(OPS_SAFE_7D5, mockCode);
-        if (TREASURY_SAFE.code.length == 0) vm.etch(TREASURY_SAFE, mockCode);
-        
+        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+        address deployerAddress = vm.addr(deployerPrivateKey);
+
+        // 1. START BROADCAST FIRST
+        vm.startBroadcast(deployerPrivateKey);
+
+        // 2. DEPLOY MOCKS TO ANVIL (if they don't exist)
+        // Because we are broadcasting, Anvil receives these contracts and code.length > 0
+        if (LP_ACCUMULATOR_WALLET.code.length == 0) LP_ACCUMULATOR_WALLET = address(new MockGnosisSafe());
+        if (FOUNDER_POOL_WALLET.code.length == 0) FOUNDER_POOL_WALLET = address(new MockGnosisSafe());
+        if (OPS_SAFE_705.code.length == 0) OPS_SAFE_705 = address(new MockGnosisSafe());
+        if (OPS_SAFE_7D5.code.length == 0) {
+            if (OPS_SAFE_7D5 == OPS_SAFE_705) {
+                OPS_SAFE_7D5 = OPS_SAFE_705;
+            } else {
+                OPS_SAFE_7D5 = address(new MockGnosisSafe());
+            }
+        }
+        if (TREASURY_SAFE.code.length == 0) TREASURY_SAFE = address(new MockGnosisSafe());
+
         if (BSC_USDT.code.length == 0) {
-            vm.etch(BSC_USDT, address(new MockUSDT()).code);
-            uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
-            address deployerAddr = vm.addr(deployerPrivateKey);
-            MockUSDT(BSC_USDT).mint(deployerAddr, 1_000_000e18);
-            MockUSDT(BSC_USDT).mint(msg.sender, 1_000_000e18);
-            MockUSDT(BSC_USDT).mint(0xF977814e90dA44bFA03b6295A0616a897441aceC, 1_000_000e18);
+            MockUSDT mockUsdt = new MockUSDT();
+            BSC_USDT = address(mockUsdt);
+            // Pre-fund both the deployer and the whale so the liquidity step succeeds
+            mockUsdt.mint(deployerAddress, 1_000_000e18);
+            mockUsdt.mint(0xF977814e90dA44bFA03b6295A0616a897441aceC, 1_000_000e18);
         }
 
-        // Etch Mock Pancake Factory and Router to satisfy DappStakeRouter and liquidity seeding
         if (PANCAKESWAP_V2_ROUTER.code.length == 0) {
             address mockPair = address(new MockGnosisSafe());
             address mockFactory = address(new MockPancakeFactory(mockPair));
-            address mockRouter = address(new MockPancakeRouter(mockFactory));
-            vm.etch(PANCAKESWAP_V2_ROUTER, mockRouter.code);
+            PANCAKESWAP_V2_ROUTER = address(new MockPancakeRouter(mockFactory));
         }
-
-        // Ensure we broadcast under deployer EOA address/private key
-        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
-        address deployerAddress = vm.addr(deployerPrivateKey);
-        
-        vm.startBroadcast(deployerPrivateKey);
 
         // ════════════════════════════════════════════════════════════════════════════════
         // PART 2 - DEPLOYMENT SEQUENCE
         // ════════════════════════════════════════════════════════════════════════════════
 
-        // Step 1 - Deploy AIEFToken
+        // Step 1 - Deploy AIEFToken (Will now successfully pass the code.length checks)
         token = new AIEFToken(
             FOUNDER_POOL_WALLET,
             LP_ACCUMULATOR_WALLET
@@ -396,10 +397,6 @@ contract DeployLocalForkScript is Script {
         require(token.tradingEnabled() == true, "Assert: tradingEnabled after call");
         require(token.owner() == address(0), "Assert: owner is renounced");
         require(token.restrictionEndTime() > block.timestamp, "Assert: dex restriction window active");
-
-        // Note: Step 15 transferOwnership calls are skipped for all contracts (Rewards Pool, Staking, Founder Alloc,
-        // EcosystemPayment, and DappStakeRouter) because they are controlled by immutable opsSafe addresses
-        // rather than inheriting Ownable. Ownership of the AIEFToken was already renounced in Step 14.
 
         vm.stopBroadcast();
 
