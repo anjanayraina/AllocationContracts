@@ -701,4 +701,36 @@ contract DeploymentChecklistTest is Test {
 
         vm.stopPrank();
     }
+
+    // Smoke Test 6: DEX restriction enforcement
+    function testSmoke_DexRestriction() public {
+        address buyer = address(0xBBBBBB);
+
+        // Fund the pair with some AIEF so it can simulate sending tokens on a "buy"
+        vm.prank(DEPLOYER_EOA);
+        MockGnosisSafe(TREASURY_SAFE).executeCall(
+            address(token),
+            abi.encodeWithSignature("transfer(address,uint256)", pair, 1_000e18)
+        );
+
+        // Verify restriction window is active
+        assertTrue(token.tradingEnabled(), "Smoke 6: trading should be enabled");
+        assertTrue(token.restrictionEndTime() > block.timestamp, "Smoke 6: restriction should be active");
+
+        // Attempt direct DEX buy from non-exempt wallet — expect revert
+        // When from == dexPair and to is NOT isDexRestrictionExempt, should revert
+        vm.prank(pair);
+        vm.expectRevert("AIEF: buy through dApp only");
+        token.transfer(buyer, 100e18);
+
+        // DappStakeRouter IS dex exempt — should be able to receive from pair
+        vm.prank(pair);
+        token.transfer(address(dappRouter), 100e18); // Should succeed
+
+        // Verify DappStakeRouter received the tokens (burn exempt, so exact amount)
+        assertEq(token.balanceOf(address(dappRouter)), 100e18, "Smoke 6: dappRouter should receive exact amount");
+
+        // Verify the non-exempt buyer still has 0
+        assertEq(token.balanceOf(buyer), 0, "Smoke 6: buyer should have received nothing");
+    }
 }
