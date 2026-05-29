@@ -237,7 +237,7 @@ contract EcosystemPaymentContractTest is Test {
         ecosystemPayment.processPayment(payer, partnerKey, 0, bytes32(0), "Invoice #1");
 
         // 4. Revert if metadata is too long
-        string memory longMetadata = "This is a very long metadata description designed specifically to exceed the maximum allowed length of two hundred and fifty-six bytes on the ecosystem payment contract in order to trigger the require validation check during testing runs on foundry";
+        string memory longMetadata = "This is a very long metadata description designed specifically to exceed the maximum allowed length of two hundred and fifty-six bytes on the ecosystem payment contract in order to trigger the require validation check during testing runs on foundry, so we add some extra characters to make it exceed two hundred and fifty-six bytes!";
         vm.prank(payer);
         vm.expectRevert("EPC: metadata too long");
         ecosystemPayment.processPayment(payer, partnerKey, paymentAmount, bytes32(0), longMetadata);
