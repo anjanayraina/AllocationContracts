@@ -183,47 +183,14 @@ contract DeployMainnetScript is Script {
         // Step 8 — Set StakingRewardsPool Address in AIEFToken
         token.setStakingRewardsPool(address(rewardsPool));
 
-        // Step 9 — Seed PancakeSwap Liquidity and Create Pair
-        uint256 aiefLiquidity = 500_000e18;
-        uint256 usdtLiquidity = 10_000e18;
-
-        token.approve(PANCAKESWAP_V2_ROUTER, aiefLiquidity);
-
-        // Fetch or create the DEX pair dynamically on the network
-        address factory = IPancakeRouter(PANCAKESWAP_V2_ROUTER).factory();
-        pair = IPancakeFactory(factory).getPair(address(token), BSC_USDT);
-        if (pair == address(0)) {
-            pair = IPancakeFactory(factory).createPair(
-                address(token),
-                BSC_USDT
-            );
-        }
-
-        // Approve and Add Liquidity (fails if Deployer EOA has insufficient USDT)
-        IERC20(BSC_USDT).approve(PANCAKESWAP_V2_ROUTER, usdtLiquidity);
-        IPancakeRouter(PANCAKESWAP_V2_ROUTER).addLiquidity(
-            address(token),
-            BSC_USDT,
-            aiefLiquidity,
-            usdtLiquidity,
-            0,
-            0,
-            deployerAddress,
-            block.timestamp + 10 minutes
-        );
-
         // Step 7 — Distribute Token Allocations
         token.transfer(address(rewardsPool), 400_000_000e18); // 80% — Rewards Pool
         token.transfer(address(founderAlloc), 25_000_000e18); // 5%  — Founders Pool
+        token.transfer(TREASURY_SAFE, 75_000_000e18); // 15% — Treasury Safe
 
-        // Transfer exactly remaining deployer balance to Treasury Safe to guarantee 0-balance check passes
-        uint256 deployerRemaining = token.balanceOf(deployerAddress);
-        if (deployerRemaining > 0) {
-            token.transfer(TREASURY_SAFE, deployerRemaining);
-        }
-
-        // Step 10 — Register DEX Pair in AIEFToken
-        token.setDexPair(pair);
+        // Steps 9 & 10 — PancakeSwap Liquidity Seeding, Pair Creation, and Registration
+        // SKIPPED: These will be performed manually post-deployment.
+        console2.log("Note: PancakeSwap pair creation and registration skipped in deployment script (to be done manually).");
 
         // Step 11 — Set All Exemptions in AIEFToken (Must be set BEFORE enableTrading())
         token.setExempt(address(dappRouter), true, true); // burnExempt=true, dexExempt=true
@@ -403,12 +370,11 @@ contract DeployMainnetScript is Script {
             "Assert: token balance founder alloc"
         );
 
-        // Sum of all key token holdings: 400M (Rewards) + 25M (Founders) + 75M (Treasury Safe / LP liquidity) == 500M
+        // Sum of all key token holdings: 400M (Rewards) + 25M (Founders) + 75M (Treasury Safe) == 500M
         require(
             token.balanceOf(address(rewardsPool)) +
                 token.balanceOf(address(founderAlloc)) +
-                token.balanceOf(TREASURY_SAFE) +
-                token.balanceOf(pair) ==
+                token.balanceOf(TREASURY_SAFE) ==
                 500_000_000e18,
             "Assert: Sum of all holdings is 500M"
         );
@@ -416,19 +382,13 @@ contract DeployMainnetScript is Script {
         // ════════════════════════════════════════════════════════════════════════════════
         // STEP 14 - POINT OF NO RETURN: enableTrading + renounceOwnership
         // ════════════════════════════════════════════════════════════════════════════════
-        token.enableTrading();
-        token.renounceOwnership();
-
-        // Verify immediately
+        // SKIPPED: enableTrading() and renounceOwnership() require a set dexPair,
+        // and must be performed manually post-deployment after the pool is established.
         require(
-            token.tradingEnabled() == true,
-            "Assert: tradingEnabled after call"
+            token.tradingEnabled() == false,
+            "Assert: tradingEnabled is false"
         );
-        require(token.owner() == address(0), "Assert: owner is renounced");
-        require(
-            token.restrictionEndTime() > block.timestamp,
-            "Assert: dex restriction window active"
-        );
+        require(token.owner() == deployerAddress, "Assert: owner is deployer");
     }
 
     // ════════════════════════════════════════════════════════════════════════════════
@@ -474,32 +434,29 @@ contract DeployMainnetScript is Script {
             address(dappRouter).code.length > 0,
             "PostCheck: DappStakeRouter has no code"
         );
-        require(pair.code.length > 0, "PostCheck: DEX Pair has no code");
-        console2.log("  [PASS] All 7 contract addresses contain bytecode");
+        // DEX Pair does not exist yet as it will be created manually post-deployment.
+        require(pair == address(0), "PostCheck: DEX Pair should be address(0)");
+        console2.log("  [PASS] All 6 deployed contract addresses contain bytecode");
 
         // ── 2. Ownership & Trading (irreversible) ────────────────────────────
         require(
-            token.owner() == address(0),
-            "PostCheck: ownership not renounced"
+            token.owner() == DEPLOYER_EOA,
+            "PostCheck: owner is not deployer"
         );
         require(
-            token.tradingEnabled() == true,
-            "PostCheck: trading not enabled"
+            token.tradingEnabled() == false,
+            "PostCheck: trading is enabled"
         );
         require(
-            token.restrictionEndTime() > block.timestamp,
-            "PostCheck: restriction window already expired"
-        );
-        require(
-            token.restrictionEndTime() <= block.timestamp + 180 days + 60,
-            "PostCheck: restriction window unreasonably far in future"
+            token.restrictionEndTime() == 0,
+            "PostCheck: restriction window is active"
         );
         console2.log(
-            "  [PASS] Ownership renounced, trading enabled, restriction window active"
+            "  [PASS] Owner is deployer, trading is disabled, restriction window not active"
         );
 
         // ── 3. One-Time Setters Are Locked ───────────────────────────────────
-        // After deployment, rewardsPool and dexPair are set and can never change.
+        // After deployment, rewardsPool is set and can never change.
         require(
             token.rewardsPool() != address(0),
             "PostCheck: rewardsPool not set"
@@ -508,9 +465,8 @@ contract DeployMainnetScript is Script {
             token.rewardsPool() == address(rewardsPool),
             "PostCheck: rewardsPool address mismatch"
         );
-        require(token.dexPair() != address(0), "PostCheck: dexPair not set");
-        require(token.dexPair() == pair, "PostCheck: dexPair address mismatch");
-        console2.log("  [PASS] One-time setters locked (rewardsPool, dexPair)");
+        require(token.dexPair() == address(0), "PostCheck: dexPair is set");
+        console2.log("  [PASS] One-time setters locked (rewardsPool)");
 
         // ── 4. Immutable Constructor References ──────────────────────────────
         require(
@@ -611,14 +567,13 @@ contract DeployMainnetScript is Script {
         // Full accounting: every token is accounted for
         uint256 accountedTokens = token.balanceOf(address(rewardsPool)) +
             token.balanceOf(address(founderAlloc)) +
-            token.balanceOf(TREASURY_SAFE) +
-            token.balanceOf(pair);
+            token.balanceOf(TREASURY_SAFE);
         require(
             accountedTokens == 500_000_000e18,
             "PostCheck: token accounting mismatch - lost tokens"
         );
         console2.log(
-            "  [PASS] Token distribution: 400M rewards + 25M founders + treasury + LP = 500M"
+            "  [PASS] Token distribution: 400M rewards + 25M founders + treasury = 500M"
         );
 
         // ── 8. StakingRewardsPool Operational State ──────────────────────────

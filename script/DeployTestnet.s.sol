@@ -162,21 +162,9 @@ contract DeployTestnetScript is Script {
         token.transfer(address(founderAlloc), 25_000_000e18); // 5%  — Founders Pool
         token.transfer(TREASURY_SAFE, 75_000_000e18); // 15% — Treasury Safe
 
-        // Step 9 - Seed PancakeSwap Liquidity and Create Pair
-        // Fetch or create the DEX pair dynamically on the testnet
-        address factory = IPancakeRouter(PANCAKESWAP_V2_ROUTER).factory();
-        pair = IPancakeFactory(factory).getPair(address(token), BSC_USDT);
-        if (pair == address(0)) {
-            pair = IPancakeFactory(factory).createPair(
-                address(token),
-                BSC_USDT
-            );
-        }
-        console2.log("DEX Pair established at address:", pair);
-        console2.log("Note: Initial PancakeSwap liquidity seeding (500k AIEF + 10k USDT) to be triggered post-deploy via Treasury Safe.");
-
-        // Step 10 - Register DEX Pair in AIEFToken
-        token.setDexPair(pair);
+        // Steps 9 & 10 - PancakeSwap Liquidity Seeding, Pair Creation, and Registration
+        // SKIPPED: These will be performed manually post-deployment.
+        console2.log("Note: PancakeSwap pair creation and registration skipped in deployment script (to be done manually).");
 
         // Step 11 - Set All Exemptions in AIEFToken
         // burnExempt true, dexExempt true
@@ -216,7 +204,7 @@ contract DeployTestnetScript is Script {
             token.rewardsPool() == address(rewardsPool),
             "Assert: rewardsPool is correct"
         );
-        require(token.dexPair() == pair, "Assert: dexPair is correct");
+        require(token.dexPair() == address(0), "Assert: dexPair is correct");
         require(
             token.founderPoolWallet() == FOUNDER_POOL_WALLET,
             "Assert: founderPoolWallet is correct"
@@ -369,8 +357,7 @@ contract DeployTestnetScript is Script {
         require(
             token.balanceOf(address(rewardsPool)) +
                 token.balanceOf(address(founderAlloc)) +
-                token.balanceOf(TREASURY_SAFE) +
-                token.balanceOf(pair) ==
+                token.balanceOf(TREASURY_SAFE) ==
                 500_000_000e18,
             "Assert: Sum of all holdings is 500M"
         );
@@ -378,19 +365,13 @@ contract DeployTestnetScript is Script {
         // ════════════════════════════════════════════════════════════════════════════════
         // STEP 14 - POINT OF NO RETURN: enableTrading + renounceOwnership
         // ════════════════════════════════════════════════════════════════════════════════
-        token.enableTrading();
-        token.renounceOwnership();
-
-        // Post-enable checks inside the same script
+        // SKIPPED: enableTrading() and renounceOwnership() require a set dexPair,
+        // and must be performed manually post-deployment after the pool is established.
         require(
-            token.tradingEnabled() == true,
-            "Assert: tradingEnabled after call"
+            token.tradingEnabled() == false,
+            "Assert: tradingEnabled is false"
         );
-        require(token.owner() == address(0), "Assert: owner is renounced");
-        require(
-            token.restrictionEndTime() > block.timestamp,
-            "Assert: dex restriction window active"
-        );
+        require(token.owner() == deployerAddress, "Assert: owner is deployer");
 
         // Note: Step 15 ownership transfers for ownable contracts are skipped since core AIEF Protocol
         // contracts do not inherit Ownable and are permanently governed by the immutable constructor params.
@@ -415,7 +396,7 @@ contract DeployTestnetScript is Script {
         console2.log("FOUNDER_ALLOCATION:", address(founderAlloc));
         console2.log("ECOSYSTEM_PAYMENT: ", address(ecosystemPayment));
         console2.log("DAPP_STAKE_ROUTER: ", address(dappRouter));
-        console2.log("PAIR:              ", pair);
+        console2.log("PAIR:              ", address(0));
         console2.log(
             "======================================================================="
         );
