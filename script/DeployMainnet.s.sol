@@ -49,44 +49,6 @@ interface IERC20 {
     ) external returns (bool);
 }
 
-// Simple contract to act as Gnosis Safe mock for code.length > 0 checks
-contract MockGnosisSafe {}
-
-contract MockPancakeFactory {
-    address public immutable pair;
-    constructor(address _pair) {
-        pair = _pair;
-    }
-    function getPair(address, address) external view returns (address) {
-        return pair;
-    }
-    function createPair(address, address) external returns (address) {
-        return pair;
-    }
-}
-
-contract MockPancakeRouter {
-    address public immutable factoryAddr;
-    constructor(address _factory) {
-        factoryAddr = _factory;
-    }
-    function factory() external view returns (address) {
-        return factoryAddr;
-    }
-    function addLiquidity(
-        address,
-        address,
-        uint256,
-        uint256,
-        uint256,
-        uint256,
-        address,
-        uint256
-    ) external pure returns (uint256, uint256, uint256) {
-        return (0, 0, 0);
-    }
-}
-
 contract DeployMainnetScript is Script {
     // ════════════════════════════════════════════════════════════════════════════════
     // PART 1 - ADDRESSES & PREREQUISITES (BSC MAINNET SPECIFIC)
@@ -118,128 +80,14 @@ contract DeployMainnetScript is Script {
     DappStakeRouter public dappRouter;
     address public pair;
 
-    /// @dev Fetch private key securely from environmental variables.
-    ///      Falls back to a standard local Key with clear warnings if none specified.
-    function getPrivateKey() internal view returns (uint256) {
-        string memory pkStr = vm.envOr("PRIVATE_KEY", string(""));
-        if (bytes(pkStr).length == 0) {
-            return
-                0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80; // Standard local key
-        }
-        bytes memory pkBytes = bytes(pkStr);
-        if (pkBytes.length >= 2 && pkBytes[0] == "0" && pkBytes[1] == "x") {
-            return uint256(vm.parseBytes32(pkStr));
-        } else {
-            return
-                uint256(vm.parseBytes32(string(abi.encodePacked("0x", pkStr))));
-        }
-    }
-
-    /// @dev Fetch backend signer address dynamically from environmental variables or fail gracefully.
-    function getBackendSigner() internal view returns (address) {
-        address signer = vm.envOr("BACKEND_SIGNER", address(0));
-        if (signer == address(0)) {
-            // Default dummy for safety/compilation but will log a visual warning
-            return address(0x9999999999999999999999999999999999999999);
-        }
-        return signer;
-    }
-
     function run() public {
-        uint256 deployerPrivateKey = getPrivateKey();
-        address derivedDeployer = vm.addr(deployerPrivateKey);
+        address BACKEND_SIGNER = vm.envOr("BACKEND_SIGNER", address(0));
+        require(
+            BACKEND_SIGNER != address(0),
+            "Prerequisite Error: BACKEND_SIGNER environment variable not set in .env!"
+        );
 
-        bool isLocalFork = (derivedDeployer != DEPLOYER_EOA);
-
-        address BACKEND_SIGNER = getBackendSigner();
-        if (
-            BACKEND_SIGNER ==
-            address(0x9999999999999999999999999999999999999999)
-        ) {
-            console2.log(
-                "WARNING: Using default dummy BACKEND_SIGNER (Open Item O10 is unresolved!)."
-            );
-            console2.log(
-                "To resolve, supply 'BACKEND_SIGNER=0x...' in your environment variables."
-            );
-        }
-
-        if (isLocalFork) {
-            console2.log(
-                "=== FORK MODE: Private key does not match DEPLOYER_EOA ==="
-            );
-            console2.log("Derived deployer: ", derivedDeployer);
-            console2.log("Expected deployer:", DEPLOYER_EOA);
-            _runFork(BACKEND_SIGNER);
-        } else {
-            console2.log("=== MAINNET MODE: Deployer EOA matched ===");
-            _runMainnet(deployerPrivateKey, BACKEND_SIGNER);
-        }
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    // FORK MODE — uses vm.startPrank so vm.etch state is visible to all calls
-    // ════════════════════════════════════════════════════════════════════════════════
-    function _runFork(address BACKEND_SIGNER) internal {
-        // 1. Prepare mock bytecodes for addresses that don't exist on the fork
-        bytes
-            memory mockCode = hex"6080604052348015600f57600080fd5b50603f80601d6000396000f3fe6080604052600080fdfea2646970667358221220bfde0ad71a812df93f0b2f56b0c2a5c1387d559868dbb9fa54a4ba6d2de9632864736f6c63430008130033";
-        if (LP_ACCUMULATOR_WALLET.code.length == 0)
-            vm.etch(LP_ACCUMULATOR_WALLET, mockCode);
-        if (FOUNDER_POOL_WALLET.code.length == 0)
-            vm.etch(FOUNDER_POOL_WALLET, mockCode);
-        if (OPS_SAFE.code.length == 0) vm.etch(OPS_SAFE, mockCode);
-        if (TREASURY_SAFE.code.length == 0) vm.etch(TREASURY_SAFE, mockCode);
-
-        // 2. Mock PancakeSwap Router + Factory if not on fork
-        if (PANCAKESWAP_V2_ROUTER.code.length == 0) {
-            console2.log("Mocking PancakeSwap Router and Factory...");
-            MockGnosisSafe mockPair = new MockGnosisSafe();
-            MockPancakeFactory mockFactory = new MockPancakeFactory(
-                address(mockPair)
-            );
-            MockPancakeRouter mockRouter = new MockPancakeRouter(
-                address(mockFactory)
-            );
-            // Etch bytecodes onto the constant addresses
-            vm.etch(PANCAKESWAP_V2_ROUTER, address(mockRouter).code);
-            address fAddr = mockRouter.factory();
-            vm.etch(fAddr, address(mockFactory).code);
-        }
-
-        // 3. Fund DEPLOYER_EOA with BNB + USDT
-        vm.deal(DEPLOYER_EOA, 100 ether);
-        address usdtWhale = 0xF977814e90dA44bFA03b6295A0616a897441aceC;
-        vm.prank(usdtWhale);
-        IERC20(BSC_USDT).transfer(DEPLOYER_EOA, 10_000e18);
-        console2.log("Funded DEPLOYER_EOA with USDT from Binance Whale.");
-
-        // 4. Impersonate DEPLOYER_EOA for the entire deployment (NOT broadcast)
-        vm.startPrank(DEPLOYER_EOA);
-
-        _deploy(DEPLOYER_EOA, BACKEND_SIGNER);
-
-        vm.stopPrank();
-
-        // 5. Step 12 — OPS_SAFE configuration (only possible in fork mode via prank)
-        vm.startPrank(OPS_SAFE);
-        staking.setRouterCaller(address(dappRouter), true);
-        staking.setAuthorizedPlanCaller(5, address(founderAlloc), true);
-        vm.stopPrank();
-        console2.log("Step 12: OPS_SAFE configurations applied via prank.");
-
-        _postDeploymentChecks(BACKEND_SIGNER, true);
-        _logResults(BACKEND_SIGNER);
-    }
-
-    // ════════════════════════════════════════════════════════════════════════════════
-    // MAINNET MODE — uses vm.startBroadcast with real private key
-    // ════════════════════════════════════════════════════════════════════════════════
-    function _runMainnet(
-        uint256 deployerPrivateKey,
-        address BACKEND_SIGNER
-    ) internal {
-        // Strict prerequisite checks for mainnet
+        // Strict prerequisite checks for mainnet: verification of correct code presence
         require(
             LP_ACCUMULATOR_WALLET.code.length > 0,
             "Prerequisite: LP_ACCUMULATOR_WALLET must have code"
@@ -265,12 +113,21 @@ contract DeployMainnetScript is Script {
             "Prerequisite: BSC_USDT must have code"
         );
 
-        vm.startBroadcast(deployerPrivateKey);
+        // Start broadcasting from EOA key supplied via command line
+        vm.startBroadcast();
 
+        // Safety assertion that active sender is indeed DEPLOYER_EOA
+        require(
+            msg.sender == DEPLOYER_EOA,
+            "Deployer EOA mismatch! Active deployer key is not DEPLOYER_EOA"
+        );
+
+        console2.log("=== MAINNET MODE: Deployer EOA matched and verified ===");
         _deploy(DEPLOYER_EOA, BACKEND_SIGNER);
 
         vm.stopBroadcast();
 
+        // Run post-deployment checks (Step 12 is false since it is run post-deploy manually via OPS_SAFE)
         _postDeploymentChecks(BACKEND_SIGNER, false);
         _logResults(BACKEND_SIGNER);
     }
@@ -829,7 +686,7 @@ contract DeployMainnetScript is Script {
         }
         console2.log("  [PASS] StakingContract: 6 plans correct, not paused");
 
-        // ── 10. FounderAllocationContract State ──────────────────────────────
+        // ── 10. Founder Allocation Contract State ────────────────────────────
         require(
             founderAlloc.poolBalance() == 25_000_000e18,
             "PostCheck: founderAlloc poolBalance wrong"
@@ -859,7 +716,6 @@ contract DeployMainnetScript is Script {
         );
 
         // ── 11. Step 12 Verification (fork mode only) ───────────────────────
-        // On mainnet, Step 12 is done post-deploy via OPS_SAFE multisig.
         if (checkStep12) {
             require(
                 staking.routerCallers(address(dappRouter)) == true,
