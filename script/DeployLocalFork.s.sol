@@ -415,5 +415,22 @@ contract DeployLocalForkScript is Script {
         console2.log("DAPP_STAKE_ROUTER: ", address(dappRouter));
         console2.log("PAIR:              ", pair);
         console2.log("-----------------------------------------");
+
+        // Save deployed addresses to JSON file for integration testing
+        string memory rootObj = "root";
+        vm.serializeAddress(rootObj, "token", address(token));
+        vm.serializeAddress(rootObj, "rewardsPool", address(rewardsPool));
+        vm.serializeAddress(rootObj, "staking", address(staking));
+        vm.serializeAddress(rootObj, "founderAlloc", address(founderAlloc));
+        vm.serializeAddress(rootObj, "ecosystemPayment", address(ecosystemPayment));
+        vm.serializeAddress(rootObj, "dappRouter", address(dappRouter));
+        vm.serializeAddress(rootObj, "pair", pair);
+        vm.serializeAddress(rootObj, "founderPoolWallet", FOUNDER_POOL_WALLET);
+        vm.serializeAddress(rootObj, "lpAccumulatorWallet", LP_ACCUMULATOR_WALLET);
+        vm.serializeAddress(rootObj, "opsSafe", OPS_SAFE_7D5);
+        vm.serializeAddress(rootObj, "remainderWallet", TREASURY_SAFE);
+        string memory jsonOutput = vm.serializeAddress(rootObj, "usdt", BSC_USDT);
+        
+        vm.writeJson(jsonOutput, "./deployed_addresses.json");
     }
 }
