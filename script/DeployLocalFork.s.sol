@@ -7,6 +7,7 @@ import {AIEFToken} from "../src/AIEFToken-2026.sol";
 import {StakingRewardsPool} from "../src/StakingRewardsPool-2026.sol";
 import {StakingContract} from "../src/StakingContract-2026.sol";
 import {FounderAllocationContract} from "../src/FounderAllocationContract-2026.sol";
+import {EcosystemPaymentContract} from "../src/EcosystemPaymentContract-2026.sol";
 import {DappStakeRouter} from "../src/DappStakeRouter-2026.sol";
 
 // Minimal Interfaces for PancakeSwap V2 Setup
@@ -38,33 +39,6 @@ interface IERC20 {
 // Simple contract to act as Gnosis Safe mock for code.length > 0 checks
 contract MockGnosisSafe {}
 
-// Step 5 - EcosystemPaymentContract (Mock definition since it's not in the codebase)
-contract MockEcosystemPaymentContract {
-    address public immutable token;
-    address public immutable rewardsPool;
-    address public immutable treasurySafe;
-    address public immutable opsSafe;
-    address public owner;
-
-    constructor(
-        address token_,
-        address rewardsPool_,
-        address treasurySafe_,
-        address opsSafe_
-    ) {
-        token = token_;
-        rewardsPool = rewardsPool_;
-        treasurySafe = treasurySafe_;
-        opsSafe = opsSafe_;
-        owner = msg.sender;
-    }
-
-    function transferOwnership(address newOwner) external {
-        require(msg.sender == owner, "Ownable: caller is not the owner");
-        owner = newOwner;
-    }
-}
-
 contract DeployLocalForkScript is Script {
     // 1.1 Confirmed Wallet Addresses — Checked and checksummed for Solidity compilation
     address public constant DEPLOYER_EOA = 0x4E9cAc333B4Fc2B11a5cbAcd7e855a452F840308;
@@ -88,7 +62,7 @@ contract DeployLocalForkScript is Script {
     StakingRewardsPool public rewardsPool;
     StakingContract public staking;
     FounderAllocationContract public founderAlloc;
-    MockEcosystemPaymentContract public ecosystemPayment;
+    EcosystemPaymentContract public ecosystemPayment;
     DappStakeRouter public dappRouter;
     address public pair;
 
@@ -146,8 +120,8 @@ contract DeployLocalForkScript is Script {
             TREASURY_SAFE // remainderWallet
         );
 
-        // Step 5 - Deploy EcosystemPaymentContract (Mocked)
-        ecosystemPayment = new MockEcosystemPaymentContract(
+        // Step 5 - Deploy EcosystemPaymentContract
+        ecosystemPayment = new EcosystemPaymentContract(
             address(token),
             address(rewardsPool),
             TREASURY_SAFE,
@@ -340,10 +314,9 @@ contract DeployLocalForkScript is Script {
         require(token.owner() == address(0), "Assert: owner is renounced");
         require(token.restrictionEndTime() > block.timestamp, "Assert: dex restriction window active");
 
-        // Note: Step 15 transferOwnership calls are skipped for Rewards Pool, Staking, Founder Alloc,
-        // and DappStakeRouter because these contracts are controlled by immutable opsSafe addresses
-        // rather than inheriting Ownable. We only transfer ownership of the mock ecosystemPayment.
-        ecosystemPayment.transferOwnership(OPS_SAFE_7D5);
+        // Note: Step 15 transferOwnership calls are skipped for all contracts (Rewards Pool, Staking, Founder Alloc,
+        // EcosystemPayment, and DappStakeRouter) because they are controlled by immutable opsSafe addresses
+        // rather than inheriting Ownable. Ownership of the AIEFToken was already renounced in Step 14.
 
         vm.stopBroadcast();
 
