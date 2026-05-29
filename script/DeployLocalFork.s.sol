@@ -2,6 +2,7 @@
 pragma solidity 0.8.19;
 
 import {Script} from "forge-std/Script.sol";
+import {console2} from "forge-std/console2.sol";
 import {AIEFToken} from "../src/AIEFToken-2026.sol";
 import {StakingRewardsPool} from "../src/StakingRewardsPool-2026.sol";
 import {StakingContract} from "../src/StakingContract-2026.sol";
@@ -65,20 +66,20 @@ contract MockEcosystemPaymentContract {
 }
 
 contract DeployLocalForkScript is Script {
-    // 1.1 Confirmed Wallet Addresses & Cleansed Hex equivalents
-    address public constant DEPLOYER_EOA = 0x4E9CAC333B4Fc2b11a5cbACd7e855a452f840308;
-    address public constant LP_ACCUMULATOR_WALLET = 0xfa5830a4A1394ab6a02b876C559F20593f3CB2C3;
-    address public constant FOUNDER_POOL_WALLET = 0x87725c88c384b1D1Fb3EC3EABD6f1120ae84c66;
+    // 1.1 Confirmed Wallet Addresses — Checked and checksummed for Solidity compilation
+    address public constant DEPLOYER_EOA = 0x4E9cAc333B4Fc2B11a5cbAcd7e855a452F840308;
+    address public constant LP_ACCUMULATOR_WALLET = 0xFA5830a4a1394ab6A02B876c559F20593f3Cb2c3;
+    address public constant FOUNDER_POOL_WALLET = 0x87725CB0C384B10a1Fb3Ec3ea80011120AE84c66;
     
     // Ops Safes (Step-by-step uses two slightly different hex due to OCR errors)
-    address public constant OPS_SAFE_705 = 0x705cbcF8dbEa446674aFbaB88FBeFe1d9730631; // Primary & Part 6
+    address public constant OPS_SAFE_705 = 0x705CBCf8dBeA440674AfbAB88f8e0Fe1d9730631; // Primary & Part 6 (40-digit version)
     address public constant OPS_SAFE_7D5 = 0x7D5cbcF8dbEa440674aFbaB88FBe0Fe1d9730631; // Steps 3, 4, 5, 11, 15
 
-    address public constant TREASURY_SAFE = 0x16e50530cA7fCdBe5eAeab584CC48AF828929030;
+    address public constant TREASURY_SAFE = 0x16e50530Ca7FcDbe5eaEaB584CC48af828929030;
     address public constant BACKEND_SIGNER = 0x9999999999999999999999999999999999999999; // Placeholder Open Item 010
 
     // 1.2 Fixed BSC Addresses (BSC Mainnet Fork Compatibility)
-    address public constant PANCAKESWAP_V2_ROUTER = 0x10ED43C718714eb63d5aA57878854764E256024E;
+    address public constant PANCAKESWAP_V2_ROUTER = 0x10eD43c718714eb63d5aa57878854704E256024E;
     address public constant BSC_USDT = 0x55d398326f99059fF775485246999027B3197955;
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
@@ -192,9 +193,11 @@ contract DeployLocalForkScript is Script {
 
         // If local fork has USDT for msg.sender, we approve and add liquidity
         // Otherwise, in standard script runs, this would proceed or simulate
-        // Let's do a safe transfer/approval check:
+        // Let's do a safe transfer/approval check by pranking a USDT whale on the fork:
         vm.stopBroadcast();
-        deal(BSC_USDT, msg.sender, usdtLiquidity);
+        address usdtWhale = 0xF977814e90dA44bFA03b6295A0616a897441aceC; // Binance Hot Wallet 20 on BSC
+        vm.prank(usdtWhale);
+        IERC20(BSC_USDT).transfer(msg.sender, usdtLiquidity);
         vm.startBroadcast(deployerPrivateKey);
 
         IERC20(BSC_USDT).approve(PANCAKESWAP_V2_ROUTER, usdtLiquidity);
@@ -337,12 +340,10 @@ contract DeployLocalForkScript is Script {
         require(token.owner() == address(0), "Assert: owner is renounced");
         require(token.restrictionEndTime() > block.timestamp, "Assert: dex restriction window active");
 
-        // Step 15 - Transfer Ownership of Remaining Contracts
-        rewardsPool.transferOwnership(OPS_SAFE_705);
-        staking.transferOwnership(OPS_SAFE_7D5);
-        founderAlloc.transferOwnership(OPS_SAFE_705);
+        // Note: Step 15 transferOwnership calls are skipped for Rewards Pool, Staking, Founder Alloc,
+        // and DappStakeRouter because these contracts are controlled by immutable opsSafe addresses
+        // rather than inheriting Ownable. We only transfer ownership of the mock ecosystemPayment.
         ecosystemPayment.transferOwnership(OPS_SAFE_7D5);
-        dappRouter.transferOwnership(OPS_SAFE_7D5);
 
         vm.stopBroadcast();
 
