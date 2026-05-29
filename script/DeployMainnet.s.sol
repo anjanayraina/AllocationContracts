@@ -36,6 +36,44 @@ interface IERC20 {
     function transfer(address recipient, uint256 amount) external returns (bool);
 }
 
+// Simple contract to act as Gnosis Safe mock for code.length > 0 checks
+contract MockGnosisSafe {}
+
+contract MockPancakeFactory {
+    address public immutable pair;
+    constructor(address _pair) {
+        pair = _pair;
+    }
+    function getPair(address, address) external view returns (address) {
+        return pair;
+    }
+    function createPair(address, address) external returns (address) {
+        return pair;
+    }
+}
+
+contract MockPancakeRouter {
+    address public immutable factoryAddr;
+    constructor(address _factory) {
+        factoryAddr = _factory;
+    }
+    function factory() external view returns (address) {
+        return factoryAddr;
+    }
+    function addLiquidity(
+        address,
+        address,
+        uint256,
+        uint256,
+        uint256,
+        uint256,
+        address,
+        uint256
+    ) external pure returns (uint256, uint256, uint256) {
+        return (0, 0, 0);
+    }
+}
+
 contract DeployMainnetScript is Script {
     // ════════════════════════════════════════════════════════════════════════════════
     // PART 1 - ADDRESSES & PREREQUISITES (BSC MAINNET SPECIFIC)
@@ -89,17 +127,9 @@ contract DeployMainnetScript is Script {
 
     function run() public {
         uint256 deployerPrivateKey = getPrivateKey();
-        address deployerAddress = vm.addr(deployerPrivateKey);
+        address derivedDeployer = vm.addr(deployerPrivateKey);
 
-        // Security check on deployer address mismatch
-        if (deployerAddress != DEPLOYER_EOA) {
-            console2.log("WARNING: Deployer EOA derived from private key does not match DEPLOYER_EOA!");
-            console2.log("Derived deployer: ", deployerAddress);
-            console2.log("Expected deployer:", DEPLOYER_EOA);
-            if (deployerPrivateKey != 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80) {
-                revert("Deployer EOA mismatch!");
-            }
-        }
+        bool isLocalFork = (derivedDeployer != DEPLOYER_EOA);
 
         address BACKEND_SIGNER = getBackendSigner();
         if (BACKEND_SIGNER == address(0x9999999999999999999999999999999999999999)) {
@@ -107,22 +137,89 @@ contract DeployMainnetScript is Script {
             console2.log("To resolve, supply 'BACKEND_SIGNER=0x...' in your environment variables.");
         }
 
-        // Check that target wallet/safe addresses already contain code (strict prerequisite for safety)
-        if (block.chainid == 56) { // BSC Mainnet
-            require(LP_ACCUMULATOR_WALLET.code.length > 0, "Prerequisite: LP_ACCUMULATOR_WALLET must have code");
-            require(FOUNDER_POOL_WALLET.code.length > 0, "Prerequisite: FOUNDER_POOL_WALLET must have code");
-            require(OPS_SAFE.code.length > 0, "Prerequisite: OPS_SAFE must have code");
-            require(TREASURY_SAFE.code.length > 0, "Prerequisite: TREASURY_SAFE must have code");
-            require(PANCAKESWAP_V2_ROUTER.code.length > 0, "Prerequisite: PANCAKESWAP_V2_ROUTER must have code");
-            require(BSC_USDT.code.length > 0, "Prerequisite: BSC_USDT must have code");
+        if (isLocalFork) {
+            console2.log("=== FORK MODE: Private key does not match DEPLOYER_EOA ===");
+            console2.log("Derived deployer: ", derivedDeployer);
+            console2.log("Expected deployer:", DEPLOYER_EOA);
+            _runFork(BACKEND_SIGNER);
+        } else {
+            console2.log("=== MAINNET MODE: Deployer EOA matched ===");
+            _runMainnet(deployerPrivateKey, BACKEND_SIGNER);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    // FORK MODE — uses vm.startPrank so vm.etch state is visible to all calls
+    // ════════════════════════════════════════════════════════════════════════════════
+    function _runFork(address BACKEND_SIGNER) internal {
+        // 1. Prepare mock bytecodes for addresses that don't exist on the fork
+        bytes memory mockCode = hex"6080604052348015600f57600080fd5b50603f80601d6000396000f3fe6080604052600080fdfea2646970667358221220bfde0ad71a812df93f0b2f56b0c2a5c1387d559868dbb9fa54a4ba6d2de9632864736f6c63430008130033";
+        if (LP_ACCUMULATOR_WALLET.code.length == 0) vm.etch(LP_ACCUMULATOR_WALLET, mockCode);
+        if (FOUNDER_POOL_WALLET.code.length == 0) vm.etch(FOUNDER_POOL_WALLET, mockCode);
+        if (OPS_SAFE.code.length == 0) vm.etch(OPS_SAFE, mockCode);
+        if (TREASURY_SAFE.code.length == 0) vm.etch(TREASURY_SAFE, mockCode);
+
+        // 2. Mock PancakeSwap Router + Factory if not on fork
+        if (PANCAKESWAP_V2_ROUTER.code.length == 0) {
+            console2.log("Mocking PancakeSwap Router and Factory...");
+            MockGnosisSafe mockPair = new MockGnosisSafe();
+            MockPancakeFactory mockFactory = new MockPancakeFactory(address(mockPair));
+            MockPancakeRouter mockRouter = new MockPancakeRouter(address(mockFactory));
+            // Etch bytecodes onto the constant addresses
+            vm.etch(PANCAKESWAP_V2_ROUTER, address(mockRouter).code);
+            address fAddr = mockRouter.factory();
+            vm.etch(fAddr, address(mockFactory).code);
         }
 
-        // ════════════════════════════════════════════════════════════════════════════════
-        // PART 2 - DEPLOYMENT SEQUENCE (Steps 1 to 11)
-        // ════════════════════════════════════════════════════════════════════════════════
-        
+        // 3. Fund DEPLOYER_EOA with BNB + USDT
+        vm.deal(DEPLOYER_EOA, 100 ether);
+        address usdtWhale = 0xF977814e90dA44bFA03b6295A0616a897441aceC;
+        vm.prank(usdtWhale);
+        IERC20(BSC_USDT).transfer(DEPLOYER_EOA, 10_000e18);
+        console2.log("Funded DEPLOYER_EOA with USDT from Binance Whale.");
+
+        // 4. Impersonate DEPLOYER_EOA for the entire deployment (NOT broadcast)
+        vm.startPrank(DEPLOYER_EOA);
+
+        _deploy(DEPLOYER_EOA, BACKEND_SIGNER);
+
+        vm.stopPrank();
+
+        // 5. Step 12 — OPS_SAFE configuration (only possible in fork mode via prank)
+        vm.startPrank(OPS_SAFE);
+        staking.setRouterCaller(address(dappRouter), true);
+        staking.setAuthorizedPlanCaller(5, address(founderAlloc), true);
+        vm.stopPrank();
+        console2.log("Step 12: OPS_SAFE configurations applied via prank.");
+
+        _logResults(BACKEND_SIGNER);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    // MAINNET MODE — uses vm.startBroadcast with real private key
+    // ════════════════════════════════════════════════════════════════════════════════
+    function _runMainnet(uint256 deployerPrivateKey, address BACKEND_SIGNER) internal {
+        // Strict prerequisite checks for mainnet
+        require(LP_ACCUMULATOR_WALLET.code.length > 0, "Prerequisite: LP_ACCUMULATOR_WALLET must have code");
+        require(FOUNDER_POOL_WALLET.code.length > 0, "Prerequisite: FOUNDER_POOL_WALLET must have code");
+        require(OPS_SAFE.code.length > 0, "Prerequisite: OPS_SAFE must have code");
+        require(TREASURY_SAFE.code.length > 0, "Prerequisite: TREASURY_SAFE must have code");
+        require(PANCAKESWAP_V2_ROUTER.code.length > 0, "Prerequisite: PANCAKESWAP_V2_ROUTER must have code");
+        require(BSC_USDT.code.length > 0, "Prerequisite: BSC_USDT must have code");
+
         vm.startBroadcast(deployerPrivateKey);
 
+        _deploy(DEPLOYER_EOA, BACKEND_SIGNER);
+
+        vm.stopBroadcast();
+
+        _logResults(BACKEND_SIGNER);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    // SHARED DEPLOYMENT LOGIC (Steps 1–14)
+    // ════════════════════════════════════════════════════════════════════════════════
+    function _deploy(address deployerAddress, address BACKEND_SIGNER) internal {
         // Step 1 — Deploy AIEFToken
         token = new AIEFToken(
             FOUNDER_POOL_WALLET,
@@ -179,7 +276,7 @@ contract DeployMainnetScript is Script {
 
         // Step 9 — Seed PancakeSwap Liquidity and Create Pair
         uint256 aiefLiquidity = 500_000e18;
-        uint256 usdtLiquidity = 10_000e18; // Deployer EOA must hold the required USDT on mainnet!
+        uint256 usdtLiquidity = 10_000e18;
 
         token.approve(PANCAKESWAP_V2_ROUTER, aiefLiquidity);
 
@@ -231,7 +328,7 @@ contract DeployMainnetScript is Script {
         token.removeExempt(deployerAddress);
 
         // ════════════════════════════════════════════════════════════════════════════════
-        // PART 3 - PRE-FLIGHT VERIFICATION CHECKLIST (Excluding Safe role states)
+        // PART 3 - PRE-FLIGHT VERIFICATION CHECKLIST
         // ════════════════════════════════════════════════════════════════════════════════
 
         // Token Contract Assertions
@@ -263,7 +360,7 @@ contract DeployMainnetScript is Script {
         require(rewardsPool.signer() == BACKEND_SIGNER, "Assert: backend signer is correct");
         require(rewardsPool.claimsPaused() == false, "Assert: claims not paused");
 
-        // StakingContract General Assertions (Toggles set by Ops Safe checked later)
+        // StakingContract General Assertions
         {
             (, bool active0, , , ) = staking.plans(0);
             require(active0 == true, "Assert: Plan 0 is active");
@@ -319,17 +416,16 @@ contract DeployMainnetScript is Script {
         token.enableTrading();
         token.renounceOwnership();
 
-        // Verify immediately in the same broadcast script
+        // Verify immediately
         require(token.tradingEnabled() == true, "Assert: tradingEnabled after call");
         require(token.owner() == address(0), "Assert: owner is renounced");
         require(token.restrictionEndTime() > block.timestamp, "Assert: dex restriction window active");
+    }
 
-        vm.stopBroadcast();
-
-        // ════════════════════════════════════════════════════════════════════════════════
-        // POST-DEPLOYMENT VERIFICATION & LOGGING
-        // ════════════════════════════════════════════════════════════════════════════════
-
+    // ════════════════════════════════════════════════════════════════════════════════
+    // POST-DEPLOYMENT LOGGING
+    // ════════════════════════════════════════════════════════════════════════════════
+    function _logResults(address BACKEND_SIGNER) internal view {
         console2.log("=======================================================================");
         console2.log("AIEF PROTOCOL - BSC MAINNET DEPLOYMENT COMPLETED SUCCESSFULLY");
         console2.log("=======================================================================");
