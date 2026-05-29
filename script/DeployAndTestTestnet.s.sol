@@ -159,8 +159,21 @@ contract DeployAndTestTestnetScript is Script, StdCheats {
     DappStakeRouter public dappRouter;
     address public pair;
 
+    function getPrivateKey() internal view returns (uint256) {
+        string memory pkStr = vm.envOr("PRIVATE_KEY", string(""));
+        if (bytes(pkStr).length == 0) {
+            return 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
+        }
+        bytes memory pkBytes = bytes(pkStr);
+        if (pkBytes.length >= 2 && pkBytes[0] == "0" && pkBytes[1] == "x") {
+            return uint256(vm.parseBytes32(pkStr));
+        } else {
+            return uint256(vm.parseBytes32(string(abi.encodePacked("0x", pkStr))));
+        }
+    }
+
     function run() public {
-        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+        uint256 deployerPrivateKey = getPrivateKey();
         address deployerAddress = vm.addr(deployerPrivateKey);
 
         // 1. START BROADCAST FIRST
