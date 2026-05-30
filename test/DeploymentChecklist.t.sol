@@ -491,6 +491,10 @@ contract DeploymentChecklistTest is Test {
 
     // Smoke Test 1: Sell tax split
     function testSmoke_SellTaxSplit() public {
+        console2.log("\n==================================================");
+        console2.log("SMOKE TEST 1: SELL TAX SPLIT VERIFICATION");
+        console2.log("==================================================");
+
         address buyer = address(0xAAAA);
         address seller = address(0xBBBB);
 
@@ -501,22 +505,33 @@ contract DeploymentChecklistTest is Test {
             abi.encodeWithSignature("transfer(address,uint256)", seller, 10_000e18)
         );
 
-        // We register the pair as a Dex Pair
+        console2.log("Seller pre-funded with 10,000 AIEF");
+        console2.log("DEX Pair registered:", pair);
         assertEq(token.dexPair(), pair);
 
         // Standard transfer (non-dex) to buyer
+        uint256 supplyBeforeTransfer = token.totalSupply();
+        console2.log("Performing Standard non-DEX Transfer of 1,000 AIEF from Seller to Buyer...");
         vm.prank(seller);
         token.transfer(buyer, 1_000e18);
 
         // Verify the 0.5% transfer burn (5 AIEF burned, 995 AIEF received)
-        assertEq(token.balanceOf(buyer), 995e18, "Smoke 1: transfer burn mismatch");
+        uint256 buyerBalance = token.balanceOf(buyer);
+        uint256 supplyAfterTransfer = token.totalSupply();
+        console2.log("--- Standard Transfer Result ---");
+        console2.log("Buyer Received Balance (Expected 995):", buyerBalance / 1e18);
+        console2.log("Total Supply Reduced by (Expected 5):", (supplyBeforeTransfer - supplyAfterTransfer) / 1e18);
+        assertEq(buyerBalance, 995e18, "Smoke 1: transfer burn mismatch");
+        assertEq(supplyBeforeTransfer - supplyAfterTransfer, 5e18, "Smoke 1: supply reduction mismatch");
 
         // Now simulate a sale to the DEX (transfer to pair)
         uint256 poolBalBefore = token.balanceOf(address(rewardsPool));
         uint256 founderBalBefore = token.balanceOf(FOUNDER_POOL_WALLET);
         uint256 lpBalBefore = token.balanceOf(LP_ACCUMULATOR_WALLET);
         uint256 totalSupBefore = token.totalSupply();
+        uint256 pairBalBefore = token.balanceOf(pair);
 
+        console2.log("\nPerforming DEX Sell of 500 AIEF from Buyer to DEX Pair...");
         vm.prank(buyer);
         token.transfer(pair, 500e18); // Sell 500 AIEF
 
@@ -526,25 +541,52 @@ contract DeploymentChecklistTest is Test {
         // - 25% (5 AIEF) -> founder pool
         // - 25% (5 AIEF) -> rewards pool
         // - 25% (5 AIEF) -> LP accumulator
-        assertEq(token.balanceOf(address(rewardsPool)), poolBalBefore + 5e18, "Smoke 1: rewardsPool tax share mismatch");
-        assertEq(token.balanceOf(FOUNDER_POOL_WALLET), founderBalBefore + 5e18, "Smoke 1: founderPool tax share mismatch");
-        assertEq(token.balanceOf(LP_ACCUMULATOR_WALLET), lpBalBefore + 5e18, "Smoke 1: lpAccumulator tax share mismatch");
-        
-        // 5 AIEF (sell tax burn share) + 2.4 AIEF (transfer burn on 96% net remainder) = 7.4 AIEF total burned
-        assertEq(token.totalSupply(), totalSupBefore - 7.4e18, "Smoke 1: supply-reducing burn mismatch");
+        //
+        // Remaining 96% (480 AIEF) is subject to 0.5% transfer burn = 2.4 AIEF burned.
+        // Net delivered to pair = 480 - 2.4 = 477.6 AIEF.
+
+        uint256 poolBalAfter = token.balanceOf(address(rewardsPool));
+        uint256 founderBalAfter = token.balanceOf(FOUNDER_POOL_WALLET);
+        uint256 lpBalAfter = token.balanceOf(LP_ACCUMULATOR_WALLET);
+        uint256 totalSupAfter = token.totalSupply();
+        uint256 pairBalAfter = token.balanceOf(pair);
+
+        console2.log("--- DEX Sell Tax Split Results ---");
+        console2.log("Rewards Pool Tax Share Received (Expected 5):", (poolBalAfter - poolBalBefore) / 1e18);
+        console2.log("Founder Pool Tax Share Received (Expected 5):", (founderBalAfter - founderBalBefore) / 1e18);
+        console2.log("LP Accumulator Tax Share Received (Expected 5):", (lpBalAfter - lpBalBefore) / 1e18);
+        console2.log("Total Burned on Sell (Expected 5 sell-tax burn + 2.4 transfer-burn = 7.4):", (totalSupBefore - totalSupAfter) / 1e17, "/ 10");
+        console2.log("DEX Pair Net Tokens Received (Expected 477.6):", (pairBalAfter - pairBalBefore) / 1e17, "/ 10");
+
+        assertEq(poolBalAfter, poolBalBefore + 5e18, "Smoke 1: rewardsPool tax share mismatch");
+        assertEq(founderBalAfter, founderBalBefore + 5e18, "Smoke 1: founderPool tax share mismatch");
+        assertEq(lpBalAfter, lpBalBefore + 5e18, "Smoke 1: lpAccumulator tax share mismatch");
+        assertEq(totalSupBefore - totalSupAfter, 7.4e18, "Smoke 1: supply-reducing burn mismatch");
+        assertEq(pairBalAfter - pairBalBefore, 477.6e18, "Smoke 1: DEX Pair balance mismatch");
+        console2.log(">> SMOKE TEST 1 SUCCESSFUL!\n");
     }
 
     // Smoke Test 2: DappStakeRouter staking
     function testSmoke_DappStakeRouterStaking() public {
+        console2.log("\n==================================================");
+        console2.log("SMOKE TEST 2: DAPP STAKE ROUTER STAKING FLOW");
+        console2.log("==================================================");
+
         address user = address(0xCCCCCC);
         uint256 usdtAmount = 100e18;
 
         // Pre-fund the user with USDT
         MockUSDT(BSC_USDT).mint(user, usdtAmount);
+        console2.log("User Minted USDT:", usdtAmount / 1e18);
+
+        uint256 routerAiefBefore = token.balanceOf(address(dappRouter));
+        uint256 userUsdtBefore = IERC20(BSC_USDT).balanceOf(user);
 
         vm.startPrank(user);
         IERC20(BSC_USDT).approve(address(dappRouter), usdtAmount);
+        console2.log("Approved DappStakeRouter to spend 100 USDT");
 
+        console2.log("Executing dappRouter.stake()...");
         uint256 positionId = dappRouter.stake(
             usdtAmount,
             1, // minAiefOut
@@ -553,21 +595,42 @@ contract DeploymentChecklistTest is Test {
         );
 
         // Verify position details inside StakingContract
+        console2.log("--- Staking Position Created ---");
+        console2.log("Position ID:", positionId);
         assertEq(positionId, 0, "Smoke 2: first position should be ID 0");
         assertEq(staking.positionCount(user), 1);
 
         (uint256 principal, uint8 planId, uint64 stakedAt, uint32 lockPeriod, bool active) = staking.getPosition(user, positionId);
+        console2.log("Position Principal AIEF Staked:", principal / 1e18);
+        console2.log("Plan ID:", planId);
+        console2.log("Locked Period (seconds):", lockPeriod);
+        console2.log("Active Status:", active);
+
         assertTrue(principal > 0, "Smoke 2: principal should be non-zero");
         assertEq(planId, 1);
         assertEq(stakedAt, block.timestamp);
         assertEq(lockPeriod, 60 days);
         assertTrue(active);
 
+        // Verify DappStakeRouter has no remaining dusty funds
+        uint256 routerAiefAfter = token.balanceOf(address(dappRouter));
+        uint256 routerUsdtAfter = IERC20(BSC_USDT).balanceOf(address(dappRouter));
+        console2.log("DappStakeRouter Remaining AIEF Balance (Expected 0):", routerAiefAfter);
+        console2.log("DappStakeRouter Remaining USDT Balance (Expected 0):", routerUsdtAfter);
+
+        assertEq(routerAiefAfter, 0, "Smoke 2: Dapp router AIEF balance should be swept to 0");
+        assertEq(routerUsdtAfter, 0, "Smoke 2: Dapp router USDT balance should be swept to 0");
+
         vm.stopPrank();
+        console2.log(">> SMOKE TEST 2 SUCCESSFUL!\n");
     }
 
     // Smoke Test 3: Direct stake
     function testSmoke_DirectStaking() public {
+        console2.log("\n==================================================");
+        console2.log("SMOKE TEST 3: DIRECT STAKING VERIFICATION");
+        console2.log("==================================================");
+
         address user = address(0xDDDDDD);
         uint256 stakeAmount = 5_000e18;
 
@@ -577,26 +640,44 @@ contract DeploymentChecklistTest is Test {
             address(token),
             abi.encodeWithSignature("transfer(address,uint256)", user, stakeAmount)
         );
+        console2.log("User Pre-funded with AIEF:", token.balanceOf(user) / 1e18);
+
+        uint256 contractBalBefore = token.balanceOf(address(staking));
 
         vm.startPrank(user);
         token.approve(address(staking), stakeAmount);
+        console2.log("Approved Staking Contract to spend AIEF");
 
         // Stake into Plan 0 (Flexible: 0-day lock)
+        console2.log("Staking directly into Plan 0 (Flexible Lock)...");
         staking.stake(stakeAmount, 0);
 
+        uint256 contractBalAfter = token.balanceOf(address(staking));
+        console2.log("--- Staking Results ---");
+        console2.log("Staking Contract Balance Increased by (Expected 5,000):", (contractBalAfter - contractBalBefore) / 1e18);
         assertEq(staking.positionCount(user), 1);
 
         (uint256 principal, uint8 planId, , uint32 lockPeriod, bool active) = staking.getPosition(user, 0);
+        console2.log("Staked Position Principal:", principal / 1e18);
+        console2.log("Plan ID:", planId);
+        console2.log("Lock Period:", lockPeriod);
+        console2.log("Is Active:", active);
+
         assertEq(principal, stakeAmount, "Smoke 3: principal mismatch");
         assertEq(planId, 0);
         assertEq(lockPeriod, 0);
         assertTrue(active);
 
         vm.stopPrank();
+        console2.log(">> SMOKE TEST 3 SUCCESSFUL!\n");
     }
 
     // Smoke Test 4: EIP712 claim
     function testSmoke_EIP712Claim() public {
+        console2.log("\n==================================================");
+        console2.log("SMOKE TEST 4: EIP-712 SIGNATURE CLAIM VERIFICATION");
+        console2.log("==================================================");
+
         vm.warp(block.timestamp + 1 days);
         address user = address(0xEEEEEE);
         uint256 claimAmount = 10_000e18;
@@ -636,19 +717,35 @@ contract DeploymentChecklistTest is Test {
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPrivateKey, digest);
         bytes memory signature = abi.encodePacked(r, s, v);
+        console2.log("EIP-712 Signature successfully generated by Backend Signer Key");
 
         // User claims reward
+        console2.log("Submitting claimReward on-chain as User...");
         vm.prank(user);
         rewardsPool.claimReward(claimAmount, nonce, issuedAt, expiry, signature);
 
         // Verify balance updates
-        assertEq(token.balanceOf(user), claimAmount, "Smoke 4: reward payment mismatch");
-        assertEq(rewardsPool.userNonce(user), 1, "Smoke 4: nonce should be incremented");
-        assertEq(rewardsPool.lastClaimAt(user), block.timestamp, "Smoke 4: lastClaimAt should be updated");
+        uint256 userBal = token.balanceOf(user);
+        uint256 userNonce = rewardsPool.userNonce(user);
+        uint256 lastClaim = rewardsPool.lastClaimAt(user);
+
+        console2.log("--- Claim Result ---");
+        console2.log("User Claimed Balance Received (Expected 10,000):", userBal / 1e18);
+        console2.log("User Nonce Incremented (Expected 1):", userNonce);
+        console2.log("User Last Claim Timestamp:", lastClaim);
+
+        assertEq(userBal, claimAmount, "Smoke 4: reward payment mismatch");
+        assertEq(userNonce, 1, "Smoke 4: nonce should be incremented");
+        assertEq(lastClaim, block.timestamp, "Smoke 4: lastClaimAt should be updated");
+        console2.log(">> SMOKE TEST 4 SUCCESSFUL!\n");
     }
 
     // Smoke Test 5: Ecosystem payment splits
     function testSmoke_EcosystemPaymentSplits() public {
+        console2.log("\n==================================================");
+        console2.log("SMOKE TEST 5: ECOSYSTEM PAYMENT SPLIT SYSTEM");
+        console2.log("==================================================");
+
         address payer = address(0xFFFFFF);
         address partnerKey = address(0x111122223333444455556666777788889999aAaa);
         address payoutWallet = address(0x5555555555555555555555555555555555555555);
@@ -665,6 +762,7 @@ contract DeploymentChecklistTest is Test {
                 "Checklist Partner"
             )
         );
+        console2.log("Partner registered under payout wallet:", payoutWallet);
 
         // Pre-fund payer with AIEF
         vm.prank(DEPLOYER_EOA);
@@ -672,6 +770,7 @@ contract DeploymentChecklistTest is Test {
             address(token),
             abi.encodeWithSignature("transfer(address,uint256)", payer, paymentAmount)
         );
+        console2.log("Payer pre-funded with AIEF:", token.balanceOf(payer) / 1e18);
 
         // Approve and process ecosystem payment
         vm.startPrank(payer);
@@ -681,6 +780,7 @@ contract DeploymentChecklistTest is Test {
         uint256 treasuryBalBefore = token.balanceOf(TREASURY_SAFE);
         uint256 deadBalBefore = token.balanceOf(DEAD);
 
+        console2.log("Processing Ecosystem Payment of 10,000 AIEF...");
         ecosystemPayment.processPayment(
             payer,
             partnerKey,
@@ -694,16 +794,32 @@ contract DeploymentChecklistTest is Test {
         // - 1% (100 AIEF) -> StakingRewardsPool
         // - 1% (100 AIEF) -> Treasury Safe
         // - 95% (9,500 AIEF) -> payoutWallet
-        assertEq(token.balanceOf(DEAD), deadBalBefore + 300e18, "Smoke 5: DEAD split mismatch");
-        assertEq(token.balanceOf(address(rewardsPool)), poolBalBefore + 100e18, "Smoke 5: pool split mismatch");
-        assertEq(token.balanceOf(TREASURY_SAFE), treasuryBalBefore + 100e18, "Smoke 5: treasury split mismatch");
-        assertEq(token.balanceOf(payoutWallet), 9_500e18, "Smoke 5: partner payout mismatch");
+        uint256 deadBalAfter = token.balanceOf(DEAD);
+        uint256 poolBalAfter = token.balanceOf(address(rewardsPool));
+        uint256 treasuryBalAfter = token.balanceOf(TREASURY_SAFE);
+        uint256 partnerPayout = token.balanceOf(payoutWallet);
+
+        console2.log("--- Ecosystem Payment Splits ---");
+        console2.log("DEAD Address Split Received (Expected 300):", (deadBalAfter - deadBalBefore) / 1e18);
+        console2.log("Staking Rewards Pool Split Received (Expected 100):", (poolBalAfter - poolBalBefore) / 1e18);
+        console2.log("Treasury Safe Split Received (Expected 100):", (treasuryBalAfter - treasuryBalBefore) / 1e18);
+        console2.log("Partner Payout Received (Expected 9,500):", partnerPayout / 1e18);
+
+        assertEq(deadBalAfter, deadBalBefore + 300e18, "Smoke 5: DEAD split mismatch");
+        assertEq(poolBalAfter, poolBalBefore + 100e18, "Smoke 5: pool split mismatch");
+        assertEq(treasuryBalAfter, treasuryBalBefore + 100e18, "Smoke 5: treasury split mismatch");
+        assertEq(partnerPayout, 9_500e18, "Smoke 5: partner payout mismatch");
 
         vm.stopPrank();
+        console2.log(">> SMOKE TEST 5 SUCCESSFUL!\n");
     }
 
     // Smoke Test 6: DEX restriction enforcement
     function testSmoke_DexRestriction() public {
+        console2.log("\n==================================================");
+        console2.log("SMOKE TEST 6: DEX RESTRICTION ENFORCEMENT");
+        console2.log("==================================================");
+
         address buyer = address(0xBBBBBB);
 
         // Fund the pair with some AIEF so it can simulate sending tokens on a "buy"
@@ -713,24 +829,36 @@ contract DeploymentChecklistTest is Test {
             abi.encodeWithSignature("transfer(address,uint256)", pair, 1_000e18)
         );
 
+        console2.log("DEX Pair pre-funded with 1,000 AIEF");
+        console2.log("AIEF Token Trading Enabled Status:", token.tradingEnabled());
+        console2.log("AIEF Restriction active until (timestamp):", token.restrictionEndTime());
+
         // Verify restriction window is active
         assertTrue(token.tradingEnabled(), "Smoke 6: trading should be enabled");
         assertTrue(token.restrictionEndTime() > block.timestamp, "Smoke 6: restriction should be active");
 
         // Attempt direct DEX buy from non-exempt wallet — expect revert
-        // When from == dexPair and to is NOT isDexRestrictionExempt, should revert
+        console2.log("Simulating direct DEX Buy transfer to non-exempt buyer...");
         vm.prank(pair);
         vm.expectRevert("AIEF: buy through dApp only");
         token.transfer(buyer, 100e18);
+        console2.log(">> Correctly Reverted: 'AIEF: buy through dApp only'");
 
         // DappStakeRouter IS dex exempt — should be able to receive from pair
+        console2.log("Simulating DEX buy routing to exempt DappStakeRouter...");
         vm.prank(pair);
         token.transfer(address(dappRouter), 100e18); // Should succeed
+        console2.log(">> Success: Exempt DappStakeRouter received tokens from pair!");
 
         // Verify DappStakeRouter received the tokens (burn exempt, so exact amount)
-        assertEq(token.balanceOf(address(dappRouter)), 100e18, "Smoke 6: dappRouter should receive exact amount");
+        uint256 routerBal = token.balanceOf(address(dappRouter));
+        uint256 buyerBal = token.balanceOf(buyer);
 
-        // Verify the non-exempt buyer still has 0
-        assertEq(token.balanceOf(buyer), 0, "Smoke 6: buyer should have received nothing");
+        console2.log("DappStakeRouter Received (Expected 100):", routerBal / 1e18);
+        console2.log("Non-exempt Buyer Received (Expected 0):", buyerBal / 1e18);
+
+        assertEq(routerBal, 100e18, "Smoke 6: dappRouter should receive exact amount");
+        assertEq(buyerBal, 0, "Smoke 6: buyer should have received nothing");
+        console2.log(">> SMOKE TEST 6 SUCCESSFUL!\n");
     }
 }
