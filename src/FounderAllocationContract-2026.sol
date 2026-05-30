@@ -15,14 +15,10 @@ interface IStakingContract {
     ) external returns (uint256 positionId);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  FounderAllocationContract
-// ─────────────────────────────────────────────────────────────────────────────
 
 contract FounderAllocationContract is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // ── IMMUTABLE STATE ──────────────────────────────────────────────────────
 
     /// @notice AIEF token contract. Set in constructor — never changeable.
     IERC20 public immutable token;
@@ -59,7 +55,6 @@ contract FounderAllocationContract is ReentrancyGuard {
     ///         arbitrary address. Typically the Treasury Safe.
     address public immutable remainderWallet;
 
-    // ── MUTABLE STATE ────────────────────────────────────────────────────────
 
     /// @notice Number of participants registered so far.
     ///         founderCount at registration time becomes that participant's founderNumber.
@@ -76,15 +71,14 @@ contract FounderAllocationContract is ReentrancyGuard {
     ///         Enables direct dApp reads without event indexing.
     ///         founderInfo[wallet].founderNumber == 0 means not registered.
     struct FounderInfo {
-        uint256 founderNumber; // 1-based seat number (display only)
-        uint256 allocatedAmount; // AIEF staked for this participant
-        uint256 positionId; // StakingContract position index
-        uint64 registeredAt; // block.timestamp at registration
+        uint256 founderNumber;
+        uint256 allocatedAmount;
+        uint256 positionId;
+        uint64 registeredAt;
     }
 
     mapping(address => FounderInfo) public founderInfo;
 
-    // ── EVENTS ───────────────────────────────────────────────────────────────
 
     /// @notice Emitted on every successful registration.
     ///         positionId links this event to the StakingContract position.
@@ -114,16 +108,12 @@ contract FounderAllocationContract is ReentrancyGuard {
     /// @notice Emitted when Ops Safe transfers the post-campaign remainder.
     event RemainderTransferred(address indexed destination, uint256 amount);
 
-    // ── MODIFIER ─────────────────────────────────────────────────────────────
 
     modifier onlyOpsSafe() {
         require(msg.sender == opsSafe, "FAC: only Ops Safe");
         _;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Deploys the campaign contract. All parameters are immutable after deployment.
     ///         See deployment checklist in file header for required post-deployment steps.
@@ -192,9 +182,6 @@ contract FounderAllocationContract is ReentrancyGuard {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CORE FUNCTION
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Register a participant and stake their AIEF allocation directly.
     ///
@@ -229,7 +216,6 @@ contract FounderAllocationContract is ReentrancyGuard {
         address founderWallet,
         uint256 approvedAmount
     ) external onlyOpsSafe nonReentrant {
-        // ── CHECKS ───────────────────────────────────────────────────────────
 
         require(founderWallet != address(0), "FAC: zero wallet");
         require(block.timestamp < campaignEndTime, "FAC: campaign ended");
@@ -245,10 +231,9 @@ contract FounderAllocationContract is ReentrancyGuard {
             "FAC: insufficient pool balance"
         );
 
-        // ── EFFECTS (before interactions — CEI pattern) ───────────────────────
         registeredFounders[founderWallet] = true;
         founderCount++;
-        uint256 thisFounderNumber = founderCount; // 1-based (captured after increment)
+        uint256 thisFounderNumber = founderCount;
         uint64 registeredAt = uint64(block.timestamp);
         totalAllocated += approvedAmount;
 
@@ -256,22 +241,17 @@ contract FounderAllocationContract is ReentrancyGuard {
         founderInfo[founderWallet].allocatedAmount = approvedAmount;
         founderInfo[founderWallet].registeredAt = registeredAt;
 
-        // ── INTERACTIONS ─────────────────────────────────────────────────────
 
-        // forceApprove: set allowance to exactly approvedAmount.
-        // Reset to 0 immediately after stakeFor() — no residual allowance.
         token.forceApprove(address(stakingContract), approvedAmount);
 
         uint256 positionId = stakingContract.stakeFor(
             founderWallet,
             approvedAmount,
-            founderPlanId // immutable — set at deployment, not hardcoded
+            founderPlanId
         );
 
         token.forceApprove(address(stakingContract), 0);
 
-        // positionId stored after stakeFor() returns — unavoidable, atomically
-        // reverted alongside all other state if anything fails after this point.
         founderInfo[founderWallet].positionId = positionId;
 
         emit FounderRegistered(
@@ -283,9 +263,6 @@ contract FounderAllocationContract is ReentrancyGuard {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  REMAINDER TRANSFER
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Transfer any remaining AIEF balance to remainderWallet.
     ///
@@ -316,9 +293,6 @@ contract FounderAllocationContract is ReentrancyGuard {
         emit RemainderTransferred(remainderWallet, remainder);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  VIEW HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Current AIEF balance held in the campaign pool.
     function poolBalance() external view returns (uint256) {

@@ -39,14 +39,10 @@ interface IStakingContract {
     function isRouterPlanAllowed(uint8 planId) external view returns (bool);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  DappStakeRouter
-// ─────────────────────────────────────────────────────────────────────────────
 
 contract DappStakeRouter is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // ── CONSTANTS ────────────────────────────────────────────────────────────
 
     /// @notice Basis-points denominator for slippage calculations.
     uint256 public constant BPS_DENOMINATOR = 10_000;
@@ -68,7 +64,6 @@ contract DappStakeRouter is ReentrancyGuard {
     ///         The user/dApp supplies the actual deadline in stake().
     uint256 public constant MAX_DEADLINE_WINDOW = 30 minutes;
 
-    // ── IMMUTABLE STATE ──────────────────────────────────────────────────────
 
     /// @notice AIEF token contract. Immutable.
     IERC20 public immutable token;
@@ -95,7 +90,6 @@ contract DappStakeRouter is ReentrancyGuard {
     /// @notice Derived USDT unit (10^decimals). Used for limit calculations.
     uint256 public immutable USDT_UNIT;
 
-    // ── MUTABLE STATE ────────────────────────────────────────────────────────
 
     /// @notice Operational minimum USDT per transaction. Ops Safe adjustable.
     ///         Default: 1 × USDT_UNIT (~$1). Floor: 1 × USDT_UNIT.
@@ -115,7 +109,6 @@ contract DappStakeRouter is ReentrancyGuard {
     ///         Does not affect any existing staking positions.
     bool public paused;
 
-    // ── EVENTS ───────────────────────────────────────────────────────────────
 
     /// @notice Emitted on every successful stake via this router.
     ///         usdtIn: gross USDT pulled from user.
@@ -138,7 +131,6 @@ contract DappStakeRouter is ReentrancyGuard {
     /// @notice Emitted when Ops Safe pauses or unpauses the router.
     event RouterPauseStateChanged(bool paused);
 
-    // ── MODIFIERS ────────────────────────────────────────────────────────────
 
     modifier onlyOpsSafe() {
         require(msg.sender == opsSafe, "DSR: only Ops Safe");
@@ -150,9 +142,6 @@ contract DappStakeRouter is ReentrancyGuard {
         _;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Deploys the router. Called at deployment step 7 (Spec Section 1.2).
     ///
@@ -196,15 +185,13 @@ contract DappStakeRouter is ReentrancyGuard {
         );
         require(opsSafe_.code.length > 0, "DSR: ops safe not a contract");
 
-        // Derive USDT unit from on-chain decimals — NOT hardcoded.
-        // BSC USDT = 18 decimals. Handles any USDT variant correctly.
         uint8 decimals = IERC20Metadata(usdt_).decimals();
         uint256 unit = 10 ** uint256(decimals);
 
         USDT_UNIT = unit;
-        ABSOLUTE_MAX_USDT = 100_000 * unit; // hard ceiling — never changeable
-        minUsdtPerStake = 1 * unit; // operational default: ~$1
-        maxUsdtPerStake = 10_000 * unit; // operational default: ~$10,000
+        ABSOLUTE_MAX_USDT = 100_000 * unit;
+        minUsdtPerStake = 1 * unit;
+        maxUsdtPerStake = 10_000 * unit;
 
         token = IERC20(token_);
         usdt = IERC20(usdt_);
@@ -214,9 +201,6 @@ contract DappStakeRouter is ReentrancyGuard {
         slippageBps = DEFAULT_SLIPPAGE_BPS;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CORE FUNCTION
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Swap USDT for AIEF and stake it for msg.sender in one transaction.
     ///
@@ -259,13 +243,9 @@ contract DappStakeRouter is ReentrancyGuard {
         uint256 minAiefOut,
         uint256 deadline
     ) external nonReentrant whenNotPaused returns (uint256 positionId) {
-        // ── CHECKS ───────────────────────────────────────────────────────────
 
         require(usdtIn >= minUsdtPerStake, "DSR: below minimum");
         require(usdtIn <= maxUsdtPerStake, "DSR: above maximum");
-        // Plan validity deferred to StakingContract registry — no hardcoded planId ranges.
-        // isRouterPlanAllowed() checks: exists=true, active=true, routerAllowed=true.
-        // Called before USDT pull so a rejected plan fails cheaply without wasting gas.
         require(
             stakingContract.isRouterPlanAllowed(planId),
             "DSR: plan not router-allowed"
@@ -277,31 +257,21 @@ contract DappStakeRouter is ReentrancyGuard {
             "DSR: deadline too far"
         );
 
-        // ── SNAPSHOT BALANCES (balance-delta post-condition baseline) ─────────
         uint256 usdtBefore = usdt.balanceOf(address(this));
         uint256 aiefBefore = token.balanceOf(address(this));
 
-        // ── PULL USDT FROM CALLER ─────────────────────────────────────────────
         usdt.safeTransferFrom(msg.sender, address(this), usdtIn);
-        // Verify this contract received exactly usdtIn.
-        // Guards against fee-on-transfer USDT variants that deliver less than requested.
         require(
             usdt.balanceOf(address(this)) == usdtBefore + usdtIn,
             "DSR: USDT not received"
         );
 
-        // ── BUILD SWAP PATH: USDT → AIEF ──────────────────────────────────────
         address[] memory path = new address[](2);
         path[0] = address(usdt);
         path[1] = address(token);
 
-        // ── APPROVE ROUTER TO SPEND USDT ─────────────────────────────────────
         usdt.forceApprove(address(pancakeRouter), usdtIn);
 
-        // ── EXECUTE SWAP ──────────────────────────────────────────────────────
-        // Standard variant — NOT FeeOnTransfer. DappStakeRouter is
-        // isTransferBurnExempt so AIEF received is not subject to the 0.5% burn.
-        // minAiefOut is user-supplied — real sandwich protection.
         pancakeRouter.swapExactTokensForTokens(
             usdtIn,
             minAiefOut,
@@ -310,27 +280,18 @@ contract DappStakeRouter is ReentrancyGuard {
             deadline
         );
 
-        // ── MEASURE ACTUAL AIEF RECEIVED ──────────────────────────────────────
         uint256 aiefReceived = token.balanceOf(address(this)) - aiefBefore;
         require(aiefReceived > 0, "DSR: zero AIEF received");
-        // Defence-in-depth: verify balance delta satisfies the user's minAiefOut.
-        // The swap's amountOutMin already enforces this, but an explicit post-swap
-        // check provides a clean contract-level error and guards against exotic routers.
         require(aiefReceived >= minAiefOut, "DSR: insufficient AIEF received");
 
-        // ── RESET USDT APPROVAL ───────────────────────────────────────────────
         usdt.forceApprove(address(pancakeRouter), 0);
 
-        // ── APPROVE STAKING CONTRACT TO PULL AIEF ─────────────────────────────
         token.forceApprove(address(stakingContract), aiefReceived);
 
-        // ── STAKE FOR msg.sender ──────────────────────────────────────────────
         positionId = stakingContract.stakeFor(msg.sender, aiefReceived, planId);
 
-        // ── RESET AIEF APPROVAL ───────────────────────────────────────────────
         token.forceApprove(address(stakingContract), 0);
 
-        // ── BALANCE-DELTA POST-CONDITIONS ─────────────────────────────────────
         require(usdt.balanceOf(address(this)) == usdtBefore, "DSR: USDT delta");
         require(
             token.balanceOf(address(this)) == aiefBefore,
@@ -340,9 +301,6 @@ contract DappStakeRouter is ReentrancyGuard {
         emit Staked(msg.sender, usdtIn, aiefReceived, planId, positionId);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  ADMIN (Ops Safe only)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Update the slippage tolerance applied to previewStake() suggestions.
     ///         Advisory only — does not affect stake() execution.
@@ -391,9 +349,6 @@ contract DappStakeRouter is ReentrancyGuard {
         emit RouterPauseStateChanged(paused_);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  VIEW HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice UI helper — suggests minAiefOut and expected output for a given USDT input.
     ///

@@ -9,7 +9,6 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 contract StakingRewardsPool is ReentrancyGuard, EIP712 {
     using SafeERC20 for IERC20;
 
-    // ── CONSTANTS ────────────────────────────────────────────────────────────
 
     /// @notice Alert threshold. When pool balance falls at or below this value,
     ///         LowWaterMarkTriggered is emitted. Withdrawals are NEVER blocked.
@@ -53,7 +52,6 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
     ///         Immutable — cannot be adjusted by Ops Safe or anyone else.
     uint256 public constant CLAIM_COOLDOWN = 12 hours;
 
-    // ── STATE VARIABLES ──────────────────────────────────────────────────────
 
     /// @notice AIEF token contract. Set in constructor — never changeable.
     IERC20 public immutable token;
@@ -84,7 +82,6 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
     ///         Starts at 0 (never claimed). Public — dApp reads for UX display.
     mapping(address => uint256) public lastClaimAt;
 
-    // ── EVENTS ───────────────────────────────────────────────────────────────
 
     /// @notice Emitted on every successful claim. Indexed by user for backend
     ///         confirmation that the on-chain claim was processed.
@@ -113,16 +110,12 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
     ///         Old key is invalid immediately after this event.
     event SignerUpdated(address indexed oldSigner, address indexed newSigner);
 
-    // ── MODIFIER ─────────────────────────────────────────────────────────────
 
     modifier onlyOpsSafe() {
         require(msg.sender == opsSafe, "SRP: only Ops Safe");
         _;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Deploys the pool. Called at deployment step 2 (Spec Section 1.2).
     ///         400,000,000 AIEF is transferred to this contract at step 12.
@@ -151,9 +144,6 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         signer = signer_;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  PRIMARY PAYOUT FUNCTION
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Claim a signed reward amount. The only function that moves tokens
     ///         out of this contract.
@@ -197,31 +187,20 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         uint256 expiry,
         bytes calldata signature
     ) external nonReentrant {
-        // ── CHECKS ───────────────────────────────────────────────────────────
 
         require(!claimsPaused, "SRP: claims paused");
 
-        // Timestamp validity: issuedAt must not be in the future (clock skew guard)
         require(issuedAt <= block.timestamp, "SRP: issued in future");
 
-        // Expiry must be after issuance — guards the subtraction below against underflow
-        // and rejects logically invalid signatures where expiry <= issuedAt
         require(expiry > issuedAt, "SRP: invalid expiry");
 
-        // Total validity window measured from issuedAt to expiry.
-        // Using issuedAt instead of block.timestamp prevents a signature issued
-        // far in the past from passing a remaining-time check in its final hour.
         require(
             expiry - issuedAt <= MAX_SIGNATURE_VALIDITY,
             "SRP: expiry window too long"
         );
 
-        // Signature must not have expired at submission time
         require(block.timestamp <= expiry, "SRP: signature expired");
 
-        // Per-wallet cooldown: minimum 12 hours between successive claims.
-        // Aligns with the staking ROI cron cycle — no legitimate user needs
-        // more frequent claims. Limits drain rate even under signer compromise.
         require(
             block.timestamp >= lastClaimAt[msg.sender] + CLAIM_COOLDOWN,
             "SRP: claim cooldown active"
@@ -230,8 +209,6 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         require(nonce == userNonce[msg.sender], "SRP: invalid nonce");
         require(amount > 0, "SRP: zero amount");
 
-        // Per-claim cap: limits damage from backend bugs, decimal errors,
-        // or signer compromise. Larger payouts must be split across multiple claims.
         require(amount <= MAX_CLAIM_AMOUNT, "SRP: claim too large");
 
         require(
@@ -239,14 +216,10 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
             "SRP: insufficient pool balance"
         );
 
-        // ── SIGNATURE VERIFICATION ───────────────────────────────────────────
-        // Build the EIP-712 digest using the OZ EIP712 base contract.
-        // _hashTypedDataV4 handles domain separator (name, version, chainId,
-        // verifyingContract) — no manual domain separator needed.
         bytes32 structHash = keccak256(
             abi.encode(
                 CLAIM_TYPEHASH,
-                msg.sender, // user — must be the caller, not an arbitrary address
+                msg.sender,
                 amount,
                 nonce,
                 issuedAt,
@@ -258,17 +231,11 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         address recovered = ECDSA.recover(digest, signature);
         require(recovered == signer, "SRP: invalid signature");
 
-        // ── EFFECTS (before interactions — CEI pattern) ───────────────────────
-        // Both nonce and lastClaimAt updated BEFORE the transfer.
-        // If the transfer reverts, the entire transaction reverts and neither
-        // persists — no state corruption on failed claims.
         userNonce[msg.sender]++;
         lastClaimAt[msg.sender] = block.timestamp;
 
-        // ── INTERACTIONS ─────────────────────────────────────────────────────
         token.safeTransfer(msg.sender, amount);
 
-        // ── POST-TRANSFER CHECKS ─────────────────────────────────────────────
         uint256 remaining = token.balanceOf(address(this));
         if (remaining <= LOW_WATER_MARK) {
             emit LowWaterMarkTriggered(remaining);
@@ -277,9 +244,6 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         emit RewardClaimed(msg.sender, amount, nonce, issuedAt, expiry);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  ADMIN FUNCTIONS (Ops Safe only)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Pause or unpause claimReward(). Emergency use only.
     ///
@@ -313,9 +277,6 @@ contract StakingRewardsPool is ReentrancyGuard, EIP712 {
         emit SignerUpdated(oldSigner, newSigner);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  VIEW HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Current pool balance. Primary health indicator — monitored by
     ///         backend daily reconciliation against total outstanding liability.

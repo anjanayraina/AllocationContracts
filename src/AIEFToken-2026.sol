@@ -5,8 +5,6 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract AIEFToken is ERC20, Ownable {
-    // ── CONSTANTS ────────────────────────────────────────────────────────────
-    // All immutable after deployment. Cannot be changed even by owner.
 
     /// @notice Hard-capped total supply. Minted once at construction to deployer.
     ///         No mint function exists — this number can never increase.
@@ -22,10 +20,10 @@ contract AIEFToken is ERC20, Ownable {
     ///         remainder (tax - burnAmt - rewardsAmt - founderAmt) to guarantee no
     ///         integer-division dust is ever stranded in the contract. The constant
     ///         documents the intended economic split; the remainder ensures exact delivery.
-    uint16 public constant SELL_BURN_BPS = 2500; // 25% of tax → burn logic
-    uint16 public constant SELL_REWARDS_BPS = 2500; // 25% of tax → rewardsPool
-    uint16 public constant SELL_LP_BPS = 2500; // 25% of tax → lpAccumulatorWallet (remainder in practice)
-    uint16 public constant SELL_FOUNDER_BPS = 2500; // 25% of tax → founderPoolWallet
+    uint16 public constant SELL_BURN_BPS = 2500;
+    uint16 public constant SELL_REWARDS_BPS = 2500;
+    uint16 public constant SELL_LP_BPS = 2500;
+    uint16 public constant SELL_FOUNDER_BPS = 2500;
 
     /// @notice Transfer burn: 0.5% deducted from every non-exempt transfer.
     ///         BEHAVIOUR AT FLOOR: stops entirely — full amount transferred, nothing
@@ -50,7 +48,6 @@ contract AIEFToken is ERC20, Ownable {
     ///         Named constant prevents magic-number errors (e.g. 1_000 vs 10_000).
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
-    // ── STATE VARIABLES ──────────────────────────────────────────────────────
 
     /// @notice Founder Pool Wallet (dedicated Gnosis Safe).
     ///         Receives 25% of sell tax (1% of trade) on every DEX sell.
@@ -96,8 +93,6 @@ contract AIEFToken is ERC20, Ownable {
     ///         replacing a procedural checklist item.
     address public immutable deploymentWallet;
 
-    // ── EXEMPTION MAPPINGS ───────────────────────────────────────────────────
-    // Two separate, independent mappings. Being in one does not imply the other.
 
     /// @notice Exempt from 0.5% transfer burn AND from sell tax.
     ///         Protocol contracts must be exempt so stated percentages are
@@ -131,7 +126,6 @@ contract AIEFToken is ERC20, Ownable {
     ///           enableTrading() is called, including DappStakeRouter.
     mapping(address => bool) public isDexRestrictionExempt;
 
-    // ── EVENTS ───────────────────────────────────────────────────────────────
 
     /// @notice Emitted once in the constructor. Permanently records the two
     ///         immutable fee destination addresses in the event log.
@@ -167,9 +161,6 @@ contract AIEFToken is ERC20, Ownable {
     ///         Transfer burn stops entirely; sell-tax burn share routes to DEAD.
     event BurnFloorReached(uint256 finalSupply);
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Deploys the token, sets permanent destinations, mints total supply.
     ///
@@ -200,9 +191,6 @@ contract AIEFToken is ERC20, Ownable {
     ) ERC20("AIEF", "AIEF") {
         require(founderPoolWallet_ != address(0), "AIEF: zero founder pool");
         require(lpAccumulatorWallet_ != address(0), "AIEF: zero LP wallet");
-        // code.length checks: both are permanent irrevocable destinations receiving
-        // 1% of every sell forever. EOA addresses would pass the zero-check but have
-        // no recovery path after renounce. Gnosis Safes have code; EOAs do not.
         require(
             founderPoolWallet_.code.length > 0,
             "AIEF: founder pool must be contract"
@@ -214,24 +202,12 @@ contract AIEFToken is ERC20, Ownable {
 
         founderPoolWallet = founderPoolWallet_;
         lpAccumulatorWallet = lpAccumulatorWallet_;
-        deploymentWallet = msg.sender; // immutable — permanent on-chain record
+        deploymentWallet = msg.sender;
 
-        // Deployer receives full supply and distributes per deployment sequence:
-        //   400M → StakingRewardsPool
-        //    25M → FounderAllocationContract
-        //    25M → Treasury Safe
-        //    25M → Ecosystem Safe
-        //  24.5M → Liquidity Safe (0.5M seeds PancakeSwap pair)
         _mint(msg.sender, TOTAL_SUPPLY);
 
-        // Deployer wallet is temporarily exempt (both mappings) to allow
-        // free distribution of tokens during deployment steps 12-13.
-        // ⚠ MUST be removed via removeExempt(deployer) at step 13 before renounce.
         _setExempt(msg.sender, true, true);
 
-        // Emit permanent record of the two immutable fee destination addresses.
-        // These are the most permanent addresses in the contract — visible on BSCScan
-        // event log without manual constructor calldata decoding.
         emit TokenDeployed(
             founderPoolWallet_,
             lpAccumulatorWallet_,
@@ -239,9 +215,6 @@ contract AIEFToken is ERC20, Ownable {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  ONE-TIME SETTERS (owner only — all must be called before enableTrading)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Set the StakingRewardsPool address. Called at deployment step 4.
     ///         Cannot be changed once set — one-time setter.
@@ -294,9 +267,6 @@ contract AIEFToken is ERC20, Ownable {
         emit DexPairSet(pair);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  EXEMPTION MANAGEMENT (owner only — locked permanently after enableTrading)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Set exemption flags for an address.
     ///
@@ -338,12 +308,6 @@ contract AIEFToken is ERC20, Ownable {
         bool burnExempt,
         bool dexExempt
     ) internal {
-        // ⚠ SECURITY: The DEX pair must never be marked exempt.
-        // Exempting the pair would allow any seller to bypass the 4% sell tax
-        // by routing through an exempt-flagged pair address.
-        // Guard fires once dexPair is known (non-zero). The deployer may call
-        // _setExempt(deployerWallet, true, true) during construction before
-        // dexPair is set, which is safe and correctly allowed here.
         if (dexPair != address(0) && addr == dexPair) {
             require(
                 !burnExempt && !dexExempt,
@@ -355,9 +319,6 @@ contract AIEFToken is ERC20, Ownable {
         emit ExemptionUpdated(addr, burnExempt, dexExempt);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  TRADING ACTIVATION (owner only — call immediately before renounce)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Activate trading and start the 180-day DEX restriction window.
     ///
@@ -385,16 +346,12 @@ contract AIEFToken is ERC20, Ownable {
         require(rewardsPool != address(0), "AIEF: rewardsPool not set");
         require(dexPair != address(0), "AIEF: dexPair not set");
 
-        // Enforce that the deployer's temporary exemptions have been removed.
         require(
             !isTransferBurnExempt[deploymentWallet] &&
                 !isDexRestrictionExempt[deploymentWallet],
             "AIEF: deployer exemption not removed"
         );
 
-        // Enforce that the deployer holds zero tokens before trading opens.
-        // If the deployer still holds tokens, they could sell immediately after
-        // enableTrading() with price-discovery context the community doesn't have.
         require(
             balanceOf(deploymentWallet) == 0,
             "AIEF: deployer must hold zero tokens"
@@ -406,9 +363,6 @@ contract AIEFToken is ERC20, Ownable {
         emit TradingEnabled(restrictionEndTime);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CORE TRANSFER LOGIC
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Overrides ERC20._transfer(). Every token movement passes through here.
     ///
@@ -455,25 +409,14 @@ contract AIEFToken is ERC20, Ownable {
         require(from != address(0), "AIEF: transfer from zero");
         require(to != address(0), "AIEF: transfer to zero");
 
-        // ── ZERO-VALUE BYPASS ────────────────────────────────────────────────
-        // Route all zero-value transfers directly to the base implementation,
-        // bypassing all tax, burn, and restriction logic. This ensures full
-        // ERC-20 compatibility — including zero-value transfers originating
-        // from dexPair before enableTrading() is called, which must not revert.
         if (amount == 0) {
             super._transfer(from, to, 0);
             return;
         }
 
-        // ── PATH 1: DEX BUY ──────────────────────────────────────────────────
-        // from == dexPair means PancakeSwap is sending AIEF to a buyer.
-        // IMPORTANT: this check must come BEFORE the isTransferBurnExempt shortcut.
-        // A whitelisted router must still be blocked if trading hasn't been enabled yet.
         if (from == dexPair) {
-            // Gate 1: trading must be enabled — no exception, not even for exempt addresses
             require(tradingEnabled, "AIEF: trading not enabled");
 
-            // Gate 2: during restriction window, only isDexRestrictionExempt addresses may buy
             if (!isDexRestrictionExempt[to]) {
                 require(
                     block.timestamp >= restrictionEndTime,
@@ -481,75 +424,47 @@ contract AIEFToken is ERC20, Ownable {
                 );
             }
 
-            // DappStakeRouter is the only intended dexExempt buyer during the restriction window.
             if (isTransferBurnExempt[to]) {
                 super._transfer(from, to, amount);
                 return;
             }
 
-            // Non-exempt public buyers (post-restriction): apply 0.5% transfer burn
             _applyTransferBurn(from, to, amount);
             return;
         }
 
-        // ── PATH 2: NON-DEX EXEMPT ───────────────────────────────────────────
-        // Protocol contracts are exempt from both transfer burn and sell tax.
-        // This covers: staking deposits, reward payouts, ecosystem payments,
-        // founder allocations, LP accumulator receipts — all must be exact.
         if (isTransferBurnExempt[from] || isTransferBurnExempt[to]) {
             super._transfer(from, to, amount);
             return;
         }
 
-        // ── PATH 3: DEX SELL ─────────────────────────────────────────────────
-        // to == dexPair means a user is selling AIEF into PancakeSwap.
-        // 4% sell tax is ALWAYS collected in full regardless of burn floor status.
         if (to == dexPair) {
-            // rewardsPool is the only sell-tax destination that can genuinely be unset
-            // at sell time — it is configured via setStakingRewardsPool() post-deploy.
-            // founderPoolWallet and lpAccumulatorWallet cannot be zero: the constructor
-            // requires them and they are immutable. No runtime guards needed for those two.
             require(rewardsPool != address(0), "AIEF: rewardsPool not set");
 
             uint256 tax = (amount * SELL_TAX_BPS) / BPS_DENOMINATOR;
-            uint256 burnAmt = (tax * SELL_BURN_BPS) / BPS_DENOMINATOR; // 1% of trade
-            uint256 rewardsAmt = (tax * SELL_REWARDS_BPS) / BPS_DENOMINATOR; // 1% of trade
-            uint256 founderAmt = (tax * SELL_FOUNDER_BPS) / BPS_DENOMINATOR; // 1% of trade
-            uint256 lpAmt = tax - burnAmt - rewardsAmt - founderAmt; // remainder ~1%
+            uint256 burnAmt = (tax * SELL_BURN_BPS) / BPS_DENOMINATOR;
+            uint256 rewardsAmt = (tax * SELL_REWARDS_BPS) / BPS_DENOMINATOR;
+            uint256 founderAmt = (tax * SELL_FOUNDER_BPS) / BPS_DENOMINATOR;
+            uint256 lpAmt = tax - burnAmt - rewardsAmt - founderAmt;
 
-            // ── SELL-TAX BURN SHARE ──────────────────────────────────────────
-            // Before 200M floor : _burn() — reduces totalSupply() (supply-reducing)
-            // After  200M floor : DEAD routing — safeTransfer to DEAD (non-supply-reducing)
-            // In BOTH cases: the seller pays the full 4% sell tax.
             uint256 actualBurned = _burnFromSupply(from, burnAmt);
             if (actualBurned < burnAmt) {
-                // Post-floor: un-burned portion routes to DEAD wallet (DEAD routing — non-supply-reducing)
                 uint256 deadRemainder = burnAmt - actualBurned;
                 super._transfer(from, DEAD, deadRemainder);
             }
 
-            // Route remaining three sell-tax shares
             super._transfer(from, founderPoolWallet, founderAmt);
             super._transfer(from, rewardsPool, rewardsAmt);
             super._transfer(from, lpAccumulatorWallet, lpAmt);
 
-            // Apply 0.5% transfer burn to the 96% net that goes to PancakeSwap pool.
-            // TRANSFER BURN BEHAVIOUR AT FLOOR: stops entirely (see _applyTransferBurn).
-            // This is different from the sell-tax burn share which routes to DEAD at floor.
             uint256 netAfterTax = amount - tax;
             _applyTransferBurn(from, to, netAfterTax);
             return;
         }
 
-        // ── PATH 4: WALLET-TO-WALLET ─────────────────────────────────────────
-        // Any non-DEX, non-exempt transfer (e.g. user sends to another user).
-        // Only the 0.5% transfer burn applies. Stops entirely at floor.
         _applyTransferBurn(from, to, amount);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  BURN HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Apply the 0.5% transfer burn to a transfer.
     ///
@@ -570,7 +485,6 @@ contract AIEFToken is ERC20, Ownable {
     ) internal {
         uint256 requestedBurn = (amount * TRANSFER_BURN_BPS) / BPS_DENOMINATOR;
         uint256 actualBurn = _burnFromSupply(from, requestedBurn);
-        // If at floor: actualBurn == 0, full amount transferred — no DEAD routing
         super._transfer(from, to, amount - actualBurn);
     }
 
@@ -605,9 +519,8 @@ contract AIEFToken is ERC20, Ownable {
         burned = _availableBurnAmount(requested);
         if (burned == 0) return 0;
 
-        _burn(from, burned); // ERC20._burn() — directly reduces totalSupply()
+        _burn(from, burned);
 
-        // Emit BurnFloorReached exactly once
         if (!burnFloorReachedEmitted && totalSupply() <= BURN_FLOOR) {
             burnFloorReachedEmitted = true;
             emit BurnFloorReached(totalSupply());
@@ -616,9 +529,6 @@ contract AIEFToken is ERC20, Ownable {
         return burned;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  VIEW HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Returns true if the 180-day DEX restriction is currently active.
     ///         False means direct public buys are permitted.
@@ -640,9 +550,6 @@ contract AIEFToken is ERC20, Ownable {
         return supply > BURN_FLOOR ? supply - BURN_FLOOR : 0;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  DECIMALS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice BEP-20 standard: 18 decimals.
     function decimals() public pure override returns (uint8) {

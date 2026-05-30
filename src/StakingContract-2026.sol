@@ -8,7 +8,6 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 contract StakingContract is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // ── CONSTANTS ────────────────────────────────────────────────────────────
 
     uint256 public constant MIN_STAKE = 1e18;
     uint256 public constant MAX_POSITIONS = 350;
@@ -29,34 +28,31 @@ contract StakingContract is ReentrancyGuard {
     uint16 public constant T3 = 500;
     uint16 public constant T4 = 0;
 
-    // ── PLAN REGISTRY ────────────────────────────────────────────────────────
 
     /// @notice Configuration for a staking plan.
     ///         No founderOnly field — restricted access is handled generically
     ///         via authorizedPlanCallers[planId][caller].
     struct PlanConfig {
-        bool exists; // registered in the registry
-        bool active; // accepts new stakes (deactivatable; never affects existing)
-        bool directAllowed; // stake() callable by user directly
-        bool routerAllowed; // stakeFor() callable by routerCallers
-        uint32 lockPeriod; // seconds — captured into Position at stake time
+        bool exists;
+        bool active;
+        bool directAllowed;
+        bool routerAllowed;
+        uint32 lockPeriod;
     }
 
     mapping(uint8 => PlanConfig) public plans;
 
-    // ── POSITION STRUCT ──────────────────────────────────────────────────────
 
     /// @notice On-chain record of a single staking position.
     ///         lockPeriod captured at stake time — immutable for position's life.
     struct Position {
-        uint256 principal; // AIEF staked in wei
-        uint8 planId; // plan identifier at stake time
-        uint64 stakedAt; // block.timestamp at stake
-        uint32 lockPeriod; // captured from PlanConfig at stake time
-        bool active; // false after unstake
+        uint256 principal;
+        uint8 planId;
+        uint64 stakedAt;
+        uint32 lockPeriod;
+        bool active;
     }
 
-    // ── STATE VARIABLES ──────────────────────────────────────────────────────
 
     IERC20 public immutable token;
     address public immutable rewardsPool;
@@ -83,7 +79,6 @@ contract StakingContract is ReentrancyGuard {
     /// @notice All staking positions per wallet. Append-only.
     mapping(address => Position[]) public positions;
 
-    // ── MODIFIERS ────────────────────────────────────────────────────────────
 
     modifier onlyOpsSafe() {
         require(msg.sender == opsSafe, "SC: only Ops Safe");
@@ -95,7 +90,6 @@ contract StakingContract is ReentrancyGuard {
         _;
     }
 
-    // ── EVENTS ───────────────────────────────────────────────────────────────
 
     event Staked(
         address indexed user,
@@ -133,9 +127,6 @@ contract StakingContract is ReentrancyGuard {
     );
     event NewStakesPauseStateChanged(bool paused);
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Deploys and registers all initial plans.
     ///         Caller authorization (routerCallers, authorizedPlanCallers) is
@@ -182,8 +173,6 @@ contract StakingContract is ReentrancyGuard {
         founderPoolWallet = founderPoolWallet_;
         lpAccumulatorWallet = lpAccumulatorWallet_;
 
-        // ── Register initial 6 plans ─────────────────────────────────────────
-        // Plan 0 — Flexible: direct only, no lock
         _registerPlan(
             0,
             PlanConfig({
@@ -194,7 +183,6 @@ contract StakingContract is ReentrancyGuard {
                 lockPeriod: 0
             })
         );
-        // Plan 1 — Standard: direct + router, 60-day lock
         _registerPlan(
             1,
             PlanConfig({
@@ -205,7 +193,6 @@ contract StakingContract is ReentrancyGuard {
                 lockPeriod: uint32(60 days)
             })
         );
-        // Plan 2 — Growth: direct + router, 120-day lock
         _registerPlan(
             2,
             PlanConfig({
@@ -216,7 +203,6 @@ contract StakingContract is ReentrancyGuard {
                 lockPeriod: uint32(120 days)
             })
         );
-        // Plan 3 — Power: direct + router, 200-day lock
         _registerPlan(
             3,
             PlanConfig({
@@ -227,7 +213,6 @@ contract StakingContract is ReentrancyGuard {
                 lockPeriod: uint32(200 days)
             })
         );
-        // Plan 4 — Elite: direct + router, 360-day lock
         _registerPlan(
             4,
             PlanConfig({
@@ -238,8 +223,6 @@ contract StakingContract is ReentrancyGuard {
                 lockPeriod: uint32(360 days)
             })
         );
-        // Plan 5 — Founder Bond: no direct, no router — access via authorizedPlanCallers only.
-        // Post-deployment: setAuthorizedPlanCaller(5, address(FounderAllocationContract), true)
         _registerPlan(
             5,
             PlanConfig({
@@ -252,9 +235,6 @@ contract StakingContract is ReentrancyGuard {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  PLAN REGISTRY MANAGEMENT (Ops Safe only)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Register a new plan.
     ///         Existing plan config cannot be overwritten — once a planId is
@@ -297,9 +277,6 @@ contract StakingContract is ReentrancyGuard {
         emit PlanActivated(planId);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CALLER AUTHORIZATION (Ops Safe only)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Add or remove an address from the routerCallers whitelist.
     ///         routerCallers may call stakeFor() for any plan with routerAllowed=true.
@@ -354,9 +331,6 @@ contract StakingContract is ReentrancyGuard {
         emit NewStakesPauseStateChanged(paused);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  STAKING — PUBLIC ENTRY POINTS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Stake AIEF directly. Plan must have directAllowed=true.
     function stake(
@@ -385,9 +359,6 @@ contract StakingContract is ReentrancyGuard {
         return _stake(beneficiary, msg.sender, amount, planId);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  UNSTAKING — NEVER PAUSABLE
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Unstake a matured position and return principal (minus any deduction).
     ///
@@ -408,7 +379,6 @@ contract StakingContract is ReentrancyGuard {
 
         uint256 deduction = _calculateDeduction(elapsed, pos.principal);
 
-        // CEI: mark inactive before transfers
         pos.active = false;
 
         if (deduction > 0) {
@@ -421,9 +391,6 @@ contract StakingContract is ReentrancyGuard {
         emit Unstaked(msg.sender, positionId, returned, deduction);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  INTERNAL — PLAN VALIDATION
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Validate plan availability and caller authorization.
     ///         No business-domain logic (no "founder", no named contracts).
@@ -451,9 +418,6 @@ contract StakingContract is ReentrancyGuard {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  INTERNAL — STAKE LOGIC
-    // ─────────────────────────────────────────────────────────────────────────
 
     function _stake(
         address beneficiary,
@@ -468,14 +432,8 @@ contract StakingContract is ReentrancyGuard {
             "SC: max positions reached"
         );
 
-        // Capture lockPeriod into position — immutable for life of position.
-        // Subsequent registry changes cannot affect this position's lock.
         uint32 lockPeriod = plans[planId].lockPeriod;
 
-        // Exact receipt check: verify this contract received exactly `amount` AIEF.
-        // If StakingContract is not transfer-burn exempt in AIEFToken, the 0.5%
-        // burn reduces what we receive, corrupting position accounting.
-        // See header for exemption requirement.
         uint256 balanceBefore = token.balanceOf(address(this));
         token.safeTransferFrom(tokenSource, address(this), amount);
         require(
@@ -505,18 +463,12 @@ contract StakingContract is ReentrancyGuard {
         return positionId;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  INTERNAL — PLAN REGISTRATION
-    // ─────────────────────────────────────────────────────────────────────────
 
     function _registerPlan(uint8 planId, PlanConfig memory cfg) internal {
         plans[planId] = cfg;
         emit PlanRegistered(planId, cfg);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  INTERNAL — EXIT DEDUCTION LOGIC
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Immutable deduction tiers — cannot be changed by anyone.
     ///         Applied universally to all plans by elapsed time from stakedAt.
@@ -559,9 +511,6 @@ contract StakingContract is ReentrancyGuard {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  VIEW HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Returns true if planId exists, is active, and has routerAllowed=true.
     ///         Used by DappStakeRouter pre-flight check before executing swap.

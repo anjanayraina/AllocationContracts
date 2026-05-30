@@ -8,7 +8,6 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 contract EcosystemPaymentContract is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-    // ── CONSTANTS ────────────────────────────────────────────────────────────
 
     /// @notice Permanent DEAD address for DEAD-routing transfers.
     ///         Tokens sent here are permanently inaccessible — no private key.
@@ -21,10 +20,10 @@ contract EcosystemPaymentContract is ReentrancyGuard {
     /// @notice Fee split in basis points. All four sum to exactly 10,000.
     ///         PARTNER_BPS is declared for transparency — partnerAmount uses
     ///         remainder arithmetic in practice to absorb integer division dust.
-    uint16 public constant DEAD_BPS = 300; // 3%  → DEAD routing
-    uint16 public constant POOL_BPS = 100; // 1%  → StakingRewardsPool
-    uint16 public constant TREASURY_BPS = 100; // 1%  → Treasury Safe
-    uint16 public constant PARTNER_BPS = 9_500; // 95% → partner (remainder)
+    uint16 public constant DEAD_BPS = 300;
+    uint16 public constant POOL_BPS = 100;
+    uint16 public constant TREASURY_BPS = 100;
+    uint16 public constant PARTNER_BPS = 9_500;
 
     /// @notice Maximum byte length for on-chain partner name.
     ///         Prevents arbitrarily large strings bloating BSCScan and event logs.
@@ -34,18 +33,16 @@ contract EcosystemPaymentContract is ReentrancyGuard {
     ///         Metadata is stored in the event log only — this caps event size.
     uint256 public constant MAX_METADATA_LENGTH = 256;
 
-    // ── PARTNER STRUCT ───────────────────────────────────────────────────────
 
     /// @notice On-chain record for a registered ecosystem partner.
     struct Partner {
-        address payoutWallet; // destination for 95% of every payment
-        bool active; // Ops Safe can pause/resume per partner
-        string name; // human-readable name — on-chain, BSCScan visible
-        uint256 totalVolume; // cumulative AIEF processed for this partner
-        uint64 registeredAt; // block.timestamp at registration
+        address payoutWallet;
+        bool active;
+        string name;
+        uint256 totalVolume;
+        uint64 registeredAt;
     }
 
-    // ── IMMUTABLE STATE ──────────────────────────────────────────────────────
 
     /// @notice AIEF token contract. Immutable — set once in constructor.
     IERC20 public immutable token;
@@ -59,7 +56,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
     /// @notice Ops Safe — the only address that can manage the partner registry.
     address public immutable opsSafe;
 
-    // ── MUTABLE STATE ────────────────────────────────────────────────────────
 
     /// @notice All registered partners, keyed by their identifying address.
     ///         partnerKey is typically the partner's contract or admin address.
@@ -76,7 +72,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
     ///         Purely informational — does not affect totalSupply().
     uint256 public totalDeadRouted;
 
-    // ── EVENTS ───────────────────────────────────────────────────────────────
 
     /// @notice Emitted on every successful payment.
     ///         All five amounts sum to grossAmount. serviceId and metadata
@@ -112,16 +107,12 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         address newWallet
     );
 
-    // ── MODIFIER ─────────────────────────────────────────────────────────────
 
     modifier onlyOpsSafe() {
         require(msg.sender == opsSafe, "EPC: only Ops Safe");
         _;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CONSTRUCTOR
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Deploys the contract. Called at deployment step 6 (Spec Section 1.2).
     ///         No tokens are transferred to this contract — it holds zero balance.
@@ -166,9 +157,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         opsSafe = opsSafe_;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  CORE PAYMENT FUNCTION
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Process an AIEF payment for an ecosystem partner service.
     ///
@@ -218,7 +206,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         bytes32 serviceId,
         string calldata metadata
     ) external nonReentrant {
-        // ── CHECKS ───────────────────────────────────────────────────────────
 
         require(payer != address(0), "EPC: zero payer");
         require(msg.sender == payer, "EPC: caller must be payer");
@@ -232,35 +219,23 @@ contract EcosystemPaymentContract is ReentrancyGuard {
 
         Partner storage p = partners[partnerKey];
 
-        // ── PULL PAYMENT ─────────────────────────────────────────────────────
-        // Exact allowance: payer must have approved exactly `amount` for this call.
-        // Each payment requires a fresh exact approval — per-transaction consent.
-        // Residual allowances cannot be reused across multiple payments.
         require(
             token.allowance(payer, address(this)) == amount,
             "EPC: exact allowance required"
         );
 
-        // Pull full amount from payer. After this transfer, the contract holds
-        // exactly `amount` AIEF — immediately distributed in the steps below.
         token.safeTransferFrom(payer, address(this), amount);
 
-        // ── CALCULATE SPLITS ─────────────────────────────────────────────────
-        uint256 deadAmount = (amount * DEAD_BPS) / BPS_DENOMINATOR; // 3%
-        uint256 poolAmount = (amount * POOL_BPS) / BPS_DENOMINATOR; // 1%
-        uint256 treasuryAmt = (amount * TREASURY_BPS) / BPS_DENOMINATOR; // 1%
-        uint256 partnerAmount = amount - deadAmount - poolAmount - treasuryAmt; // ~95% + dust
+        uint256 deadAmount = (amount * DEAD_BPS) / BPS_DENOMINATOR;
+        uint256 poolAmount = (amount * POOL_BPS) / BPS_DENOMINATOR;
+        uint256 treasuryAmt = (amount * TREASURY_BPS) / BPS_DENOMINATOR;
+        uint256 partnerAmount = amount - deadAmount - poolAmount - treasuryAmt;
 
-        // ── DISTRIBUTE ATOMICALLY ─────────────────────────────────────────────
-        // All four transfers happen in the same transaction. If any reverts,
-        // the entire transaction reverts — no partial distribution possible.
-        token.safeTransfer(DEAD, deadAmount); // DEAD routing (3%)
-        token.safeTransfer(rewardsPool, poolAmount); // StakingRewardsPool (1%)
-        token.safeTransfer(treasurySafe, treasuryAmt); // Treasury Safe (1%)
-        token.safeTransfer(p.payoutWallet, partnerAmount); // Partner (95% + dust)
+        token.safeTransfer(DEAD, deadAmount);
+        token.safeTransfer(rewardsPool, poolAmount);
+        token.safeTransfer(treasurySafe, treasuryAmt);
+        token.safeTransfer(p.payoutWallet, partnerAmount);
 
-        // ── UPDATE STATE ─────────────────────────────────────────────────────
-        // After all transfers complete — contract balance is now zero.
         p.totalVolume += amount;
         totalVolume += amount;
         totalDeadRouted += deadAmount;
@@ -278,9 +253,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  PARTNER REGISTRY (Ops Safe only)
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Register a new ecosystem partner.
     ///         partnerKey is the partner's identifying address — mapping key.
@@ -363,9 +335,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         emit PartnerWalletUpdated(partnerKey, oldWallet, newWallet);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    //  VIEW HELPERS
-    // ─────────────────────────────────────────────────────────────────────────
 
     /// @notice Total number of registered partners (including inactive).
     function partnerCount() external view returns (uint256) {
