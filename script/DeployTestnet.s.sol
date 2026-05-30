@@ -51,6 +51,19 @@ interface IERC20 {
 
 contract DummyDexPair {}
 
+contract MockGnosisSafe {
+    address public owner;
+    constructor() {
+        owner = msg.sender;
+    }
+    function executeCall(address target, bytes calldata data) external returns (bytes memory) {
+        require(msg.sender == owner, "MockSafe: only owner");
+        (bool success, bytes memory result) = target.call(data);
+        require(success, "MockSafe: call failed");
+        return result;
+    }
+}
+
 contract DeployTestnetScript is Script {
     // 1.1 Confirmed Wallet Addresses — Checked and checksummed for Solidity compilation
     address public constant DEPLOYER_EOA =
@@ -89,32 +102,64 @@ contract DeployTestnetScript is Script {
     DappStakeRouter public dappRouter;
     address public pair;
 
-    function run() public {
-        // Broadcast using the EOA configured via forge CLI (either --private-key or default sender)
-        address deployerAddress = msg.sender;
-        if (deployerAddress == 0x1804c8AB1F12E6bbf3894d4083f33e07309d1f38) {
-            // Fallback: If DefaultSender is present, try loading private key or default to tx.origin
-            uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0));
-            if (deployerPrivateKey != 0) {
-                deployerAddress = vm.addr(deployerPrivateKey);
-            } else {
-                deployerAddress = tx.origin;
-            }
+    function getPrivateKey() internal view returns (uint256) {
+        string memory pkStr = vm.envOr("PRIVATE_KEY", string(""));
+        if (bytes(pkStr).length == 0) {
+            return 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
         }
+        bytes memory pkBytes = bytes(pkStr);
+        if (pkBytes.length >= 2 && pkBytes[0] == "0" && pkBytes[1] == "x") {
+            return uint256(vm.parseBytes32(pkStr));
+        } else {
+            return uint256(vm.parseBytes32(string(abi.encodePacked("0x", pkStr))));
+        }
+    }
 
-        vm.startBroadcast();
+    function run() public {
+        uint256 deployerPrivateKey = getPrivateKey();
+        address deployerAddress = vm.addr(deployerPrivateKey);
+
+        vm.startBroadcast(deployerPrivateKey);
+
+        address lpAccumulator = LP_ACCUMULATOR_WALLET;
+        address founderPool = FOUNDER_POOL_WALLET;
+        address opsSafe705 = OPS_SAFE_705;
+        address opsSafe7D5 = OPS_SAFE_7D5;
+        address treasurySafe = TREASURY_SAFE;
+
+        // Deploy Mock Gnosis Safes if they do not have code on the target chain
+        if (lpAccumulator.code.length == 0) {
+            lpAccumulator = address(new MockGnosisSafe());
+            console2.log("Deployed Mock LP Accumulator Wallet at:", lpAccumulator);
+        }
+        if (founderPool.code.length == 0) {
+            founderPool = address(new MockGnosisSafe());
+            console2.log("Deployed Mock Founder Pool Wallet at:", founderPool);
+        }
+        if (opsSafe705.code.length == 0) {
+            opsSafe705 = address(new MockGnosisSafe());
+            console2.log("Deployed Mock Ops Safe 705 at:", opsSafe705);
+        }
+        if (opsSafe7D5.code.length == 0) {
+            opsSafe7D5 = address(new MockGnosisSafe());
+            console2.log("Deployed Mock Ops Safe 7D5 at:", opsSafe7D5);
+        }
+        if (treasurySafe.code.length == 0) {
+            treasurySafe = address(new MockGnosisSafe());
+            console2.log("Deployed Mock Treasury Safe at:", treasurySafe);
+        }
 
         // ════════════════════════════════════════════════════════════════════════════════
         // PART 2 - DEPLOYMENT SEQUENCE (NO VM CHEATCODES / PRANKS FOR LIVE TESTNET)
         // ════════════════════════════════════════════════════════════════════════════════
 
         // Step 1 - Deploy AIEFToken
-        token = new AIEFToken(FOUNDER_POOL_WALLET, LP_ACCUMULATOR_WALLET);
+        token = new AIEFToken(founderPool, lpAccumulator);
 
         // Step 2 - Deploy StakingRewardsPool
         rewardsPool = new StakingRewardsPool(
             address(token),
-            OPS_SAFE_705,
+            opsSafe705,
             BACKEND_SIGNER
         );
 
@@ -122,29 +167,29 @@ contract DeployTestnetScript is Script {
         staking = new StakingContract(
             address(token),
             address(rewardsPool),
-            OPS_SAFE_7D5,
-            FOUNDER_POOL_WALLET,
-            LP_ACCUMULATOR_WALLET
+            opsSafe7D5,
+            founderPool,
+            lpAccumulator
         );
 
         // Step 4 - Deploy FounderAllocationContract
         founderAlloc = new FounderAllocationContract(
             address(token),
             address(staking),
-            OPS_SAFE_7D5,
+            opsSafe7D5,
             5, // founderPlanId
             500, // maxFounders
             50_000e18, // maxAllocationPerFounder
             block.timestamp + 180 days, // campaignEndTime (6 months recommended)
-            TREASURY_SAFE // remainderWallet
+            treasurySafe // remainderWallet
         );
 
         // Step 5 - Deploy EcosystemPaymentContract
         ecosystemPayment = new EcosystemPaymentContract(
             address(token),
             address(rewardsPool),
-            TREASURY_SAFE,
-            OPS_SAFE_7D5
+            treasurySafe,
+            opsSafe7D5
         );
 
         // Step 6 - Deploy DappStakeRouter
@@ -153,7 +198,7 @@ contract DeployTestnetScript is Script {
             BSC_USDT,
             PANCAKESWAP_V2_ROUTER,
             address(staking),
-            OPS_SAFE_705
+            opsSafe705
         );
 
         // Step 8 - Set StakingRewardsPool Address in AIEFToken
@@ -162,7 +207,7 @@ contract DeployTestnetScript is Script {
         // Step 7 - Distribute Token Allocations
         token.transfer(address(rewardsPool), 400_000_000e18); // 80% — Rewards Pool
         token.transfer(address(founderAlloc), 25_000_000e18); // 5%  — Founders Pool
-        token.transfer(TREASURY_SAFE, 75_000_000e18 - 11000e18); // 15% — Treasury Safe (minus 11,000 AIEF kept on deployer for testing)
+        token.transfer(treasurySafe, 75_000_000e18 - 11000e18); // 15% — Treasury Safe (minus 11,000 AIEF kept on deployer for testing)
 
         // Deploy mock PancakeSwap V2 Pair (DummyDexPair)
         DummyDexPair mockPair = new DummyDexPair();
@@ -179,11 +224,11 @@ contract DeployTestnetScript is Script {
         token.setExempt(address(rewardsPool), true, false);
         token.setExempt(address(founderAlloc), true, false);
         token.setExempt(address(ecosystemPayment), true, false);
-        token.setExempt(LP_ACCUMULATOR_WALLET, true, false);
-        token.setExempt(FOUNDER_POOL_WALLET, true, false);
-        token.setExempt(TREASURY_SAFE, true, false);
-        token.setExempt(OPS_SAFE_7D5, true, false);
-        token.setExempt(OPS_SAFE_705, true, false);
+        token.setExempt(lpAccumulator, true, false);
+        token.setExempt(founderPool, true, false);
+        token.setExempt(treasurySafe, true, false);
+        token.setExempt(opsSafe7D5, true, false);
+        token.setExempt(opsSafe705, true, false);
 
         // 1. EXEMPT SELL TEST
         // Transfer 1,000 AIEF to the pair while deployer is exempt.
@@ -214,9 +259,9 @@ contract DeployTestnetScript is Script {
         // Total burned: 100 AIEF + 48 AIEF = 148 AIEF
         uint256 pairBefore = token.balanceOf(pair);
         uint256 supplyBefore = token.totalSupply();
-        uint256 founderBefore = token.balanceOf(FOUNDER_POOL_WALLET);
+        uint256 founderBefore = token.balanceOf(founderPool);
         uint256 poolBefore = token.balanceOf(address(rewardsPool));
-        uint256 lpBefore = token.balanceOf(LP_ACCUMULATOR_WALLET);
+        uint256 lpBefore = token.balanceOf(lpAccumulator);
 
         token.transfer(pair, 10000e18);
 
@@ -229,7 +274,7 @@ contract DeployTestnetScript is Script {
             "Assert: Non-exempt sell - total supply reduced by 148 AIEF"
         );
         require(
-            token.balanceOf(FOUNDER_POOL_WALLET) == founderBefore + 100e18,
+            token.balanceOf(founderPool) == founderBefore + 100e18,
             "Assert: Non-exempt sell - founderPoolWallet received 100 AIEF"
         );
         require(
@@ -237,7 +282,7 @@ contract DeployTestnetScript is Script {
             "Assert: Non-exempt sell - rewardsPool received 100 AIEF"
         );
         require(
-            token.balanceOf(LP_ACCUMULATOR_WALLET) == lpBefore + 100e18,
+            token.balanceOf(lpAccumulator) == lpBefore + 100e18,
             "Assert: Non-exempt sell - lpAccumulatorWallet received 100 AIEF"
         );
 
@@ -273,11 +318,11 @@ contract DeployTestnetScript is Script {
         );
         require(token.dexPair() == pair, "Assert: dexPair is correct");
         require(
-            token.founderPoolWallet() == FOUNDER_POOL_WALLET,
+            token.founderPoolWallet() == founderPool,
             "Assert: founderPoolWallet is correct"
         );
         require(
-            token.lpAccumulatorWallet() == LP_ACCUMULATOR_WALLET,
+            token.lpAccumulatorWallet() == lpAccumulator,
             "Assert: lpAccumulatorWallet is correct"
         );
         require(
@@ -309,23 +354,23 @@ contract DeployTestnetScript is Script {
             "Assert: ecosystemPayment transferBurnExempt"
         );
         require(
-            token.isTransferBurnExempt(LP_ACCUMULATOR_WALLET) == true,
+            token.isTransferBurnExempt(lpAccumulator) == true,
             "Assert: LP accumulator transferBurnExempt"
         );
         require(
-            token.isTransferBurnExempt(FOUNDER_POOL_WALLET) == true,
+            token.isTransferBurnExempt(founderPool) == true,
             "Assert: Founder Pool transferBurnExempt"
         );
         require(
-            token.isTransferBurnExempt(TREASURY_SAFE) == true,
+            token.isTransferBurnExempt(treasurySafe) == true,
             "Assert: Treasury Safe transferBurnExempt"
         );
         require(
-            token.isTransferBurnExempt(OPS_SAFE_7D5) == true,
+            token.isTransferBurnExempt(opsSafe7D5) == true,
             "Assert: Ops Safe 7D5 transferBurnExempt"
         );
         require(
-            token.isTransferBurnExempt(OPS_SAFE_705) == true,
+            token.isTransferBurnExempt(opsSafe705) == true,
             "Assert: Ops Safe 705 transferBurnExempt"
         );
         require(
@@ -402,7 +447,7 @@ contract DeployTestnetScript is Script {
             "Assert: founderCount starts at 0"
         );
         require(
-            founderAlloc.remainderWallet() == TREASURY_SAFE,
+            founderAlloc.remainderWallet() == treasurySafe,
             "Assert: remainderWallet is correct"
         );
         require(
@@ -424,10 +469,10 @@ contract DeployTestnetScript is Script {
         require(
             token.balanceOf(address(rewardsPool)) +
                 token.balanceOf(address(founderAlloc)) +
-                token.balanceOf(TREASURY_SAFE) +
+                token.balanceOf(treasurySafe) +
                 token.balanceOf(pair) +
-                token.balanceOf(LP_ACCUMULATOR_WALLET) +
-                token.balanceOf(FOUNDER_POOL_WALLET) ==
+                token.balanceOf(lpAccumulator) +
+                token.balanceOf(founderPool) ==
                 token.totalSupply(),
             "Assert: Sum of all holdings equals total supply"
         );
@@ -472,7 +517,7 @@ contract DeployTestnetScript is Script {
         console2.log(
             "ATTENTION: YOU MUST NOW EXECUTE THESE STEP 12 CONFIGURATIONS"
         );
-        console2.log("VIA YOUR OPS SAFE MULTISIG (address: %s):", OPS_SAFE_7D5);
+        console2.log("VIA YOUR OPS SAFE MULTISIG (address: %s):", opsSafe7D5);
         console2.log(
             "-----------------------------------------------------------------------"
         );
@@ -498,12 +543,12 @@ contract DeployTestnetScript is Script {
 
         console2.log("1. AIEFToken:");
         console2.logBytes(
-            abi.encode(FOUNDER_POOL_WALLET, LP_ACCUMULATOR_WALLET)
+            abi.encode(founderPool, lpAccumulator)
         );
 
         console2.log("2. StakingRewardsPool:");
         console2.logBytes(
-            abi.encode(address(token), OPS_SAFE_705, BACKEND_SIGNER)
+            abi.encode(address(token), opsSafe705, BACKEND_SIGNER)
         );
 
         console2.log("3. StakingContract:");
@@ -511,9 +556,9 @@ contract DeployTestnetScript is Script {
             abi.encode(
                 address(token),
                 address(rewardsPool),
-                OPS_SAFE_7D5,
-                FOUNDER_POOL_WALLET,
-                LP_ACCUMULATOR_WALLET
+                opsSafe7D5,
+                founderPool,
+                lpAccumulator
             )
         );
 
@@ -522,12 +567,12 @@ contract DeployTestnetScript is Script {
             abi.encode(
                 address(token),
                 address(staking),
-                OPS_SAFE_7D5,
+                opsSafe7D5,
                 uint8(5),
                 uint256(500),
                 uint256(50_000e18),
                 block.timestamp + 180 days,
-                TREASURY_SAFE
+                treasurySafe
             )
         );
 
@@ -536,8 +581,8 @@ contract DeployTestnetScript is Script {
             abi.encode(
                 address(token),
                 address(rewardsPool),
-                TREASURY_SAFE,
-                OPS_SAFE_7D5
+                treasurySafe,
+                opsSafe7D5
             )
         );
 
@@ -548,7 +593,7 @@ contract DeployTestnetScript is Script {
                 BSC_USDT,
                 PANCAKESWAP_V2_ROUTER,
                 address(staking),
-                OPS_SAFE_705
+                opsSafe705
             )
         );
         console2.log(

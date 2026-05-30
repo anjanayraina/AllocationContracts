@@ -8,33 +8,19 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 contract EcosystemPaymentContract is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-
-    /// @notice Permanent DEAD address for DEAD-routing transfers.
-    ///         Tokens sent here are permanently inaccessible — no private key.
-    ///         DEAD routing does NOT reduce totalSupply().
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
-    /// @notice Basis-points denominator.
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
-    /// @notice Fee split in basis points. All four sum to exactly 10,000.
-    ///         PARTNER_BPS is declared for transparency — partnerAmount uses
-    ///         remainder arithmetic in practice to absorb integer division dust.
     uint16 public constant DEAD_BPS = 300;
     uint16 public constant POOL_BPS = 100;
     uint16 public constant TREASURY_BPS = 100;
     uint16 public constant PARTNER_BPS = 9_500;
 
-    /// @notice Maximum byte length for on-chain partner name.
-    ///         Prevents arbitrarily large strings bloating BSCScan and event logs.
     uint256 public constant MAX_NAME_LENGTH = 64;
 
-    /// @notice Maximum byte length for processPayment() metadata field.
-    ///         Metadata is stored in the event log only — this caps event size.
     uint256 public constant MAX_METADATA_LENGTH = 256;
 
-
-    /// @notice On-chain record for a registered ecosystem partner.
     struct Partner {
         address payoutWallet;
         bool active;
@@ -43,40 +29,22 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         uint64 registeredAt;
     }
 
-
-    /// @notice AIEF token contract. Immutable — set once in constructor.
     IERC20 public immutable token;
 
-    /// @notice StakingRewardsPool — receives 1% of every payment. Immutable.
     address public immutable rewardsPool;
 
-    /// @notice Treasury Safe — receives 1% of every payment. Immutable.
     address public immutable treasurySafe;
 
-    /// @notice Ops Safe — the only address that can manage the partner registry.
     address public immutable opsSafe;
 
-
-    /// @notice All registered partners, keyed by their identifying address.
-    ///         partnerKey is typically the partner's contract or admin address.
     mapping(address => Partner) public partners;
 
-    /// @notice Ordered list of all registered partner keys.
-    ///         Used for enumeration — not required for payment processing.
     address[] public partnerList;
 
-    /// @notice Cumulative AIEF volume processed across all partners.
     uint256 public totalVolume;
 
-    /// @notice Cumulative AIEF routed to DEAD address across all payments.
-    ///         Purely informational — does not affect totalSupply().
     uint256 public totalDeadRouted;
 
-
-    /// @notice Emitted on every successful payment.
-    ///         All five amounts sum to grossAmount. serviceId and metadata
-    ///         are partner-defined and opaque to this contract — stored in
-    ///         the event log only for partner and backend indexing.
     event PaymentProcessed(
         address indexed payer,
         address indexed partnerKey,
@@ -89,7 +57,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         string metadata
     );
 
-    /// @notice Emitted when a new partner is registered.
     event PartnerRegistered(
         address indexed partnerKey,
         address payoutWallet,
@@ -97,44 +64,19 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         uint64 registeredAt
     );
 
-    /// @notice Emitted when a partner's active status changes.
     event PartnerUpdated(address indexed partnerKey, bool active);
 
-    /// @notice Emitted when a partner's payout wallet is updated.
     event PartnerWalletUpdated(
         address indexed partnerKey,
         address oldWallet,
         address newWallet
     );
 
-
     modifier onlyOpsSafe() {
         require(msg.sender == opsSafe, "EPC: only Ops Safe");
         _;
     }
 
-
-    /// @notice Deploys the contract. Called at deployment step 6 (Spec Section 1.2).
-    ///         No tokens are transferred to this contract — it holds zero balance.
-    ///
-    ///         ⚠ TRANSFER-BURN EXEMPTION REQUIRED (deployment step 10):
-    ///         EcosystemPaymentContract MUST be marked transfer-burn exempt in
-    ///         AIEFToken before any payments are processed:
-    ///           token.setExempt(address(EcosystemPaymentContract), true, false)
-    ///         This exemption is required on both inbound and outbound transfers
-    ///         so EPC receives and distributes the exact gross amount.
-    ///         Without this exemption, AIEFToken's 0.5% transfer burn applies to
-    ///         the inbound safeTransferFrom — EPC receives less than `amount`.
-    ///         When it then attempts to distribute exactly `amount` across four
-    ///         destinations, the final safeTransfer will revert from insufficient
-    ///         balance. The result is processPayment() failing entirely, not just
-    ///         paying slightly wrong percentages. All payment functionality
-    ///         depends on this exemption being set before the first payment.
-    ///
-    /// @param token_        AIEF token contract (deployed at step 1)
-    /// @param rewardsPool_  StakingRewardsPool address (deployed at step 2)
-    /// @param treasurySafe_ Treasury Safe multisig
-    /// @param opsSafe_      Ops Safe multisig
     constructor(
         address token_,
         address rewardsPool_,
@@ -157,48 +99,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         opsSafe = opsSafe_;
     }
 
-
-    /// @notice Process an AIEF payment for an ecosystem partner service.
-    ///
-    ///         ── INTEGRATION PATTERN ─────────────────────────────────────────
-    ///         1. End user calls token.approve(EcosystemPaymentContract, amount)
-    ///            IMPORTANT: approve exactly `amount` — not more, not unlimited.
-    ///            This contract enforces an exact allowance check (see below).
-    ///         2. End user calls processPayment() directly from their own wallet.
-    ///            msg.sender must equal payer — no third-party submission.
-    ///         3. This contract verifies allowance == amount, then pulls it
-    ///         4. Splits atomically — all four transfers in one transaction
-    ///         5. Contract balance returns to zero
-    ///
-    ///         ── WHO CAN CALL processPayment() ───────────────────────────────
-    ///         Only the payer themselves. require(msg.sender == payer).
-    ///         This is the simplest, safest, and most auditable authorisation
-    ///         model. The payer wallet signs and submits the transaction directly.
-    ///         Partner dApps build the UI and construct calldata, but the user's
-    ///         wallet broadcasts. No third party can exercise a user's allowance.
-    ///         This is the standard model used by Uniswap, OpenSea, and 1inch.
-    ///
-    ///         ── WHY payer IS EXPLICIT RATHER THAN msg.sender ────────────────
-    ///         Under this model both are identical. The explicit `payer` parameter
-    ///         is kept for event log clarity — PaymentProcessed records who paid,
-    ///         making the event self-contained for backend indexing without needing
-    ///         to correlate against msg.sender from the transaction receipt.
-    ///
-    ///         ── EXACT ALLOWANCE REQUIRED ────────────────────────────────────
-    ///         payer must approve exactly `amount` — not more, not unlimited.
-    ///         Each payment requires a fresh exact approval — per-transaction consent.
-    ///
-    ///         ── SPLIT ARITHMETIC ────────────────────────────────────────────
-    ///         deadAmount    = amount × 3%   (constant)
-    ///         poolAmount    = amount × 1%   (constant)
-    ///         treasuryAmt   = amount × 1%   (constant)
-    ///         partnerAmount = remainder      (absorbs integer dust — never less than 95%)
-    ///
-    /// @param payer       Wallet paying for the service — must equal msg.sender
-    /// @param partnerKey  Registered partner identifier address
-    /// @param amount      Gross AIEF amount — must be > 0
-    /// @param serviceId   Partner-defined service identifier (opaque to contract)
-    /// @param metadata    Human-readable description — stored in event log only
     function processPayment(
         address payer,
         address partnerKey,
@@ -253,13 +153,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         );
     }
 
-
-    /// @notice Register a new ecosystem partner.
-    ///         partnerKey is the partner's identifying address — mapping key.
-    ///
-    /// @param partnerKey   Unique identifier address for this partner
-    /// @param payoutWallet Where the partner's 95% share is sent
-    /// @param name         Human-readable partner name — stored on-chain (max 64 bytes)
     function registerPartner(
         address partnerKey,
         address payoutWallet,
@@ -289,12 +182,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         emit PartnerRegistered(partnerKey, payoutWallet, name, registeredAt);
     }
 
-    /// @notice Activate or deactivate a registered partner.
-    ///         Deactivated partners cannot receive payments — processPayment()
-    ///         reverts if partner is inactive. Does not delete the partner record.
-    ///
-    /// @param partnerKey  Partner to update
-    /// @param active      True to activate, false to deactivate
     function setPartnerActive(
         address partnerKey,
         bool active
@@ -308,12 +195,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         emit PartnerUpdated(partnerKey, active);
     }
 
-    /// @notice Update the payout wallet for a registered partner.
-    ///         Used when a partner rotates their receiving address.
-    ///         Partner must be registered (registeredAt > 0).
-    ///
-    /// @param partnerKey  Partner to update
-    /// @param newWallet   New payout wallet address
     function updatePartnerWallet(
         address partnerKey,
         address newWallet
@@ -335,18 +216,14 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         emit PartnerWalletUpdated(partnerKey, oldWallet, newWallet);
     }
 
-
-    /// @notice Total number of registered partners (including inactive).
     function partnerCount() external view returns (uint256) {
         return partnerList.length;
     }
 
-    /// @notice Returns true if a partner is registered and currently active.
     function isActivePartner(address partnerKey) external view returns (bool) {
         return partners[partnerKey].active;
     }
 
-    /// @notice Full partner record for a given key.
     function getPartner(
         address partnerKey
     )
@@ -370,10 +247,6 @@ contract EcosystemPaymentContract is ReentrancyGuard {
         );
     }
 
-    /// @notice Current AIEF balance of this contract.
-    ///         Should be zero under normal operation. A non-zero balance
-    ///         usually means tokens were sent directly to this contract
-    ///         outside of processPayment(). Such tokens are not recoverable.
     function contractBalance() external view returns (uint256) {
         return token.balanceOf(address(this));
     }
