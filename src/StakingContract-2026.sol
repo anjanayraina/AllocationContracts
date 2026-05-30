@@ -8,7 +8,6 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 contract StakingContract is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
-
     uint256 public constant MIN_STAKE = 1e18;
     uint256 public constant MAX_POSITIONS = 350;
     uint256 public constant BPS_DENOMINATOR = 10_000;
