@@ -6,8 +6,12 @@ import {console2} from "forge-std/console2.sol";
 import {AIEFToken} from "../src/AIEFToken-2026.sol";
 import {StakingRewardsPool} from "../src/StakingRewardsPool-2026.sol";
 import {StakingContract} from "../src/StakingContract-2026.sol";
-import {FounderAllocationContract} from "../src/FounderAllocationContract-2026.sol";
-import {EcosystemPaymentContract} from "../src/EcosystemPaymentContract-2026.sol";
+import {
+    FounderAllocationContract
+} from "../src/FounderAllocationContract-2026.sol";
+import {
+    EcosystemPaymentContract
+} from "../src/EcosystemPaymentContract-2026.sol";
 import {DappStakeRouter} from "../src/DappStakeRouter-2026.sol";
 
 // Minimal Interfaces for PancakeSwap V2 Setup
@@ -26,14 +30,23 @@ interface IPancakeRouter {
 }
 
 interface IPancakeFactory {
-    function createPair(address tokenA, address tokenB) external returns (address pair);
-    function getPair(address tokenA, address tokenB) external view returns (address pair);
+    function createPair(
+        address tokenA,
+        address tokenB
+    ) external returns (address pair);
+    function getPair(
+        address tokenA,
+        address tokenB
+    ) external view returns (address pair);
 }
 
 interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
     function approve(address spender, uint256 amount) external returns (bool);
-    function transfer(address recipient, uint256 amount) external returns (bool);
+    function transfer(
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
 }
 
 // Simple contract to act as Gnosis Safe mock for code.length > 0 checks
@@ -92,7 +105,11 @@ contract MockUSDT {
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+    function transferFrom(
+        address from,
+        address to,
+        uint256 amount
+    ) external returns (bool) {
         allowance[from][msg.sender] -= amount;
         balanceOf[from] -= amount;
         balanceOf[to] += amount;
@@ -107,18 +124,22 @@ contract MockUSDT {
 contract DeployLocalForkScript is Script {
     // 1.1 Confirmed Wallet Addresses — Defaults configured for testnet mocks if not already deployed
     address public DEPLOYER_EOA = 0x4E9cAc333B4Fc2B11a5cbAcd7e855a452F840308;
-    address public LP_ACCUMULATOR_WALLET = 0xFA5830a4a1394ab6A02B876c559F20593f3Cb2c3;
-    address public FOUNDER_POOL_WALLET = 0x87725CB0C384B10a1Fb3Ec3ea80011120AE84c66;
-    
+    address public LP_ACCUMULATOR_WALLET =
+        0xFA5830a4a1394ab6A02B876c559F20593f3Cb2c3;
+    address public FOUNDER_POOL_WALLET =
+        0x87725CB0C384B10a1Fb3Ec3ea80011120AE84c66;
+
     // Ops Safes (Step-by-step uses two slightly different hex due to OCR errors)
     address public OPS_SAFE_705 = 0x705CBCf8dBeA440674AfbAB88f8e0Fe1d9730631; // Primary & Part 6 (40-digit version)
     address public OPS_SAFE_7D5 = 0x7D5cbcF8dbEa440674aFbaB88FBe0Fe1d9730631; // Steps 3, 4, 5, 11, 15
 
     address public TREASURY_SAFE = 0x16e50530Ca7FcDbe5eaEaB584CC48af828929030;
-    address public constant BACKEND_SIGNER = 0x9999999999999999999999999999999999999999; // Placeholder Open Item 010
+    address public constant BACKEND_SIGNER =
+        0x9999999999999999999999999999999999999999; // Placeholder Open Item 010
 
     // 1.2 Fixed BSC Addresses (BSC Mainnet Fork Compatibility)
-    address public PANCAKESWAP_V2_ROUTER = 0x10eD43c718714eb63d5aa57878854704E256024E;
+    address public PANCAKESWAP_V2_ROUTER =
+        0x10eD43c718714eb63d5aa57878854704E256024E;
     address public BSC_USDT = 0x55d398326f99059fF775485246999027B3197955;
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
@@ -132,7 +153,12 @@ contract DeployLocalForkScript is Script {
     address public pair;
 
     function run() public {
-        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+        uint256 deployerPrivateKey = vm.envOr(
+            "PRIVATE_KEY",
+            uint256(
+                0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+            )
+        );
         address deployerAddress = vm.addr(deployerPrivateKey);
 
         // 1. START BROADCAST FIRST
@@ -140,9 +166,12 @@ contract DeployLocalForkScript is Script {
 
         // 2. DEPLOY MOCKS TO ANVIL (if they don't exist)
         // Because we are broadcasting, Anvil receives these contracts and code.length > 0
-        if (LP_ACCUMULATOR_WALLET.code.length == 0) LP_ACCUMULATOR_WALLET = address(new MockGnosisSafe());
-        if (FOUNDER_POOL_WALLET.code.length == 0) FOUNDER_POOL_WALLET = address(new MockGnosisSafe());
-        if (OPS_SAFE_705.code.length == 0) OPS_SAFE_705 = address(new MockGnosisSafe());
+        if (LP_ACCUMULATOR_WALLET.code.length == 0)
+            LP_ACCUMULATOR_WALLET = address(new MockGnosisSafe());
+        if (FOUNDER_POOL_WALLET.code.length == 0)
+            FOUNDER_POOL_WALLET = address(new MockGnosisSafe());
+        if (OPS_SAFE_705.code.length == 0)
+            OPS_SAFE_705 = address(new MockGnosisSafe());
         if (OPS_SAFE_7D5.code.length == 0) {
             if (OPS_SAFE_7D5 == OPS_SAFE_705) {
                 OPS_SAFE_7D5 = OPS_SAFE_705;
@@ -150,14 +179,18 @@ contract DeployLocalForkScript is Script {
                 OPS_SAFE_7D5 = address(new MockGnosisSafe());
             }
         }
-        if (TREASURY_SAFE.code.length == 0) TREASURY_SAFE = address(new MockGnosisSafe());
+        if (TREASURY_SAFE.code.length == 0)
+            TREASURY_SAFE = address(new MockGnosisSafe());
 
         if (BSC_USDT.code.length == 0) {
             MockUSDT mockUsdt = new MockUSDT();
             BSC_USDT = address(mockUsdt);
             // Pre-fund both the deployer and the whale so the liquidity step succeeds
             mockUsdt.mint(deployerAddress, 1_000_000e18);
-            mockUsdt.mint(0xF977814e90dA44bFA03b6295A0616a897441aceC, 1_000_000e18);
+            mockUsdt.mint(
+                0xF977814e90dA44bFA03b6295A0616a897441aceC,
+                1_000_000e18
+            );
         }
 
         if (PANCAKESWAP_V2_ROUTER.code.length == 0) {
@@ -171,10 +204,7 @@ contract DeployLocalForkScript is Script {
         // ════════════════════════════════════════════════════════════════════════════════
 
         // Step 1 - Deploy AIEFToken (Will now successfully pass the code.length checks)
-        token = new AIEFToken(
-            FOUNDER_POOL_WALLET,
-            LP_ACCUMULATOR_WALLET
-        );
+        token = new AIEFToken(FOUNDER_POOL_WALLET, LP_ACCUMULATOR_WALLET);
 
         // Step 2 - Deploy StakingRewardsPool
         rewardsPool = new StakingRewardsPool(
@@ -224,7 +254,7 @@ contract DeployLocalForkScript is Script {
         // Step 7 - Distribute Token Allocations
         token.transfer(address(rewardsPool), 400_000_000e18); // 80% Rewards Pool
         token.transfer(address(founderAlloc), 25_000_000e18); // 5% Founders Pool
-        
+
         // Transfer exactly remaining deployer balance to Treasury Safe
         uint256 deployerRemaining = token.balanceOf(deployerAddress);
         if (deployerRemaining > 0) {
@@ -240,13 +270,16 @@ contract DeployLocalForkScript is Script {
         uint256 usdtLiquidity = 10_000e18;
 
         token.approve(PANCAKESWAP_V2_ROUTER, aiefLiquidity);
-        
+
         // We deal USDT to broadcast EOA so it can add liquidity on the local fork
         // For local fork test/simulation, we fetch / create the pair dynamically
         address factory = IPancakeRouter(PANCAKESWAP_V2_ROUTER).factory();
         pair = IPancakeFactory(factory).getPair(address(token), BSC_USDT);
         if (pair == address(0)) {
-            pair = IPancakeFactory(factory).createPair(address(token), BSC_USDT);
+            pair = IPancakeFactory(factory).createPair(
+                address(token),
+                BSC_USDT
+            );
         }
 
         // If local fork has USDT for deployerAddress, we approve and add liquidity
@@ -305,39 +338,114 @@ contract DeployLocalForkScript is Script {
         // ════════════════════════════════════════════════════════════════════════════════
         // PART 3 - PRE-FLIGHT VERIFICATION CHECKLIST (Scripted Assertions)
         // ════════════════════════════════════════════════════════════════════════════════
-        
+
         // Token Contract Assertions
-        require(token.totalSupply() == 500_000_000e18, "Assert: totalSupply is 500M");
-        require(token.tradingEnabled() == false, "Assert: tradingEnabled is false");
-        require(token.rewardsPool() == address(rewardsPool), "Assert: rewardsPool is correct");
+        require(
+            token.totalSupply() == 500_000_000e18,
+            "Assert: totalSupply is 500M"
+        );
+        require(
+            token.tradingEnabled() == false,
+            "Assert: tradingEnabled is false"
+        );
+        require(
+            token.rewardsPool() == address(rewardsPool),
+            "Assert: rewardsPool is correct"
+        );
         require(token.dexPair() == pair, "Assert: dexPair is correct");
-        require(token.founderPoolWallet() == FOUNDER_POOL_WALLET, "Assert: founderPoolWallet is correct");
-        require(token.lpAccumulatorWallet() == LP_ACCUMULATOR_WALLET, "Assert: lpAccumulatorWallet is correct");
-        require(token.isTransferBurnExempt(address(dappRouter)) == true, "Assert: dappRouter transferBurnExempt");
-        require(token.isDexRestrictionExempt(address(dappRouter)) == true, "Assert: dappRouter dexRestrictionExempt");
-        require(token.isTransferBurnExempt(address(staking)) == true, "Assert: staking transferBurnExempt");
-        require(token.isDexRestrictionExempt(address(staking)) == false, "Assert: staking dexRestrictionExempt");
-        require(token.isTransferBurnExempt(address(rewardsPool)) == true, "Assert: rewardsPool transferBurnExempt");
-        require(token.isTransferBurnExempt(address(founderAlloc)) == true, "Assert: founderAlloc transferBurnExempt");
-        require(token.isTransferBurnExempt(address(ecosystemPayment)) == true, "Assert: ecosystemPayment transferBurnExempt");
-        require(token.isTransferBurnExempt(LP_ACCUMULATOR_WALLET) == true, "Assert: LP accumulator transferBurnExempt");
-        require(token.isTransferBurnExempt(FOUNDER_POOL_WALLET) == true, "Assert: Founder Pool transferBurnExempt");
-        require(token.isTransferBurnExempt(TREASURY_SAFE) == true, "Assert: Treasury Safe transferBurnExempt");
-        require(token.isTransferBurnExempt(OPS_SAFE_7D5) == true, "Assert: Ops Safe 7D5 transferBurnExempt");
-        require(token.isTransferBurnExempt(OPS_SAFE_705) == true, "Assert: Ops Safe 705 transferBurnExempt");
-        require(token.isTransferBurnExempt(deployerAddress) == false, "Assert: Deployer not burn exempt");
-        require(token.isDexRestrictionExempt(deployerAddress) == false, "Assert: Deployer not dex exempt");
-        require(token.balanceOf(deployerAddress) == 0, "Assert: Deployer EOA balance is 0");
+        require(
+            token.founderPoolWallet() == FOUNDER_POOL_WALLET,
+            "Assert: founderPoolWallet is correct"
+        );
+        require(
+            token.lpAccumulatorWallet() == LP_ACCUMULATOR_WALLET,
+            "Assert: lpAccumulatorWallet is correct"
+        );
+        require(
+            token.isTransferBurnExempt(address(dappRouter)) == true,
+            "Assert: dappRouter transferBurnExempt"
+        );
+        require(
+            token.isDexRestrictionExempt(address(dappRouter)) == true,
+            "Assert: dappRouter dexRestrictionExempt"
+        );
+        require(
+            token.isTransferBurnExempt(address(staking)) == true,
+            "Assert: staking transferBurnExempt"
+        );
+        require(
+            token.isDexRestrictionExempt(address(staking)) == false,
+            "Assert: staking dexRestrictionExempt"
+        );
+        require(
+            token.isTransferBurnExempt(address(rewardsPool)) == true,
+            "Assert: rewardsPool transferBurnExempt"
+        );
+        require(
+            token.isTransferBurnExempt(address(founderAlloc)) == true,
+            "Assert: founderAlloc transferBurnExempt"
+        );
+        require(
+            token.isTransferBurnExempt(address(ecosystemPayment)) == true,
+            "Assert: ecosystemPayment transferBurnExempt"
+        );
+        require(
+            token.isTransferBurnExempt(LP_ACCUMULATOR_WALLET) == true,
+            "Assert: LP accumulator transferBurnExempt"
+        );
+        require(
+            token.isTransferBurnExempt(FOUNDER_POOL_WALLET) == true,
+            "Assert: Founder Pool transferBurnExempt"
+        );
+        require(
+            token.isTransferBurnExempt(TREASURY_SAFE) == true,
+            "Assert: Treasury Safe transferBurnExempt"
+        );
+        require(
+            token.isTransferBurnExempt(OPS_SAFE_7D5) == true,
+            "Assert: Ops Safe 7D5 transferBurnExempt"
+        );
+        require(
+            token.isTransferBurnExempt(OPS_SAFE_705) == true,
+            "Assert: Ops Safe 705 transferBurnExempt"
+        );
+        require(
+            token.isTransferBurnExempt(deployerAddress) == false,
+            "Assert: Deployer not burn exempt"
+        );
+        require(
+            token.isDexRestrictionExempt(deployerAddress) == false,
+            "Assert: Deployer not dex exempt"
+        );
+        require(
+            token.balanceOf(deployerAddress) == 0,
+            "Assert: Deployer EOA balance is 0"
+        );
 
         // StakingRewardsPool Assertions
-        require(rewardsPool.poolBalance() == 400_000_000e18, "Assert: rewards pool balance is 400M");
-        require(rewardsPool.signer() == BACKEND_SIGNER, "Assert: backend signer is correct");
-        require(rewardsPool.claimsPaused() == false, "Assert: claims not paused");
+        require(
+            rewardsPool.poolBalance() == 400_000_000e18,
+            "Assert: rewards pool balance is 400M"
+        );
+        require(
+            rewardsPool.signer() == BACKEND_SIGNER,
+            "Assert: backend signer is correct"
+        );
+        require(
+            rewardsPool.claimsPaused() == false,
+            "Assert: claims not paused"
+        );
 
         // StakingContract Assertions
-        require(staking.routerCallers(address(dappRouter)) == true, "Assert: dappRouter approved routerCaller");
-        require(staking.authorizedPlanCallers(5, address(founderAlloc)) == true, "Assert: founderAlloc authorized for Plan 5");
-        
+        require(
+            staking.routerCallers(address(dappRouter)) == true,
+            "Assert: dappRouter approved routerCaller"
+        );
+        require(
+            staking.authorizedPlanCallers(5, address(founderAlloc)) == true,
+            "Assert: founderAlloc authorized for Plan 5"
+        );
+
         {
             (, bool active0, , , ) = staking.plans(0);
             require(active0 == true, "Assert: Plan 0 is active");
@@ -364,26 +472,51 @@ contract DeployLocalForkScript is Script {
             require(direct5 == false, "Assert: Plan 5 direct stake disabled");
             require(router5 == false, "Assert: Plan 5 router stake disabled");
         }
-        require(staking.newStakesPaused() == false, "Assert: staking stakes not paused");
+        require(
+            staking.newStakesPaused() == false,
+            "Assert: staking stakes not paused"
+        );
 
         // FounderAllocationContract Assertions
-        require(founderAlloc.poolBalance() == 25_000_000e18, "Assert: founder allocation pool balance is 25M");
-        require(founderAlloc.maxFounders() == 500, "Assert: maxFounders is 500");
+        require(
+            founderAlloc.poolBalance() == 25_000_000e18,
+            "Assert: founder allocation pool balance is 25M"
+        );
+        require(
+            founderAlloc.maxFounders() == 500,
+            "Assert: maxFounders is 500"
+        );
         require(founderAlloc.founderPlanId() == 5, "Assert: planId is 5");
-        require(founderAlloc.founderCount() == 0, "Assert: founderCount starts at 0");
-        require(founderAlloc.remainderWallet() == TREASURY_SAFE, "Assert: remainderWallet is correct");
-        require(founderAlloc.campaignEndTime() > block.timestamp, "Assert: campaignEndTime is in future");
+        require(
+            founderAlloc.founderCount() == 0,
+            "Assert: founderCount starts at 0"
+        );
+        require(
+            founderAlloc.remainderWallet() == TREASURY_SAFE,
+            "Assert: remainderWallet is correct"
+        );
+        require(
+            founderAlloc.campaignEndTime() > block.timestamp,
+            "Assert: campaignEndTime is in future"
+        );
 
         // Token Distribution Assertions
-        require(token.balanceOf(address(rewardsPool)) == 400_000_000e18, "Assert: token balance rewards pool");
-        require(token.balanceOf(address(founderAlloc)) == 25_000_000e18, "Assert: token balance founder alloc");
-        
+        require(
+            token.balanceOf(address(rewardsPool)) == 400_000_000e18,
+            "Assert: token balance rewards pool"
+        );
+        require(
+            token.balanceOf(address(founderAlloc)) == 25_000_000e18,
+            "Assert: token balance founder alloc"
+        );
+
         // Sum of all key token holdings: 400M (Rewards) + 25M (Founders) + 75M (Treasury Safe / LP liquidity) == 500M
         require(
             token.balanceOf(address(rewardsPool)) +
-            token.balanceOf(address(founderAlloc)) +
-            token.balanceOf(TREASURY_SAFE) +
-            token.balanceOf(pair) == 500_000_000e18,
+                token.balanceOf(address(founderAlloc)) +
+                token.balanceOf(TREASURY_SAFE) +
+                token.balanceOf(pair) ==
+                500_000_000e18,
             "Assert: Sum of all holdings is 500M"
         );
 
@@ -394,16 +527,22 @@ contract DeployLocalForkScript is Script {
         token.renounceOwnership();
 
         // Post-enable checks inside the same script
-        require(token.tradingEnabled() == true, "Assert: tradingEnabled after call");
+        require(
+            token.tradingEnabled() == true,
+            "Assert: tradingEnabled after call"
+        );
         require(token.owner() == address(0), "Assert: owner is renounced");
-        require(token.restrictionEndTime() > block.timestamp, "Assert: dex restriction window active");
+        require(
+            token.restrictionEndTime() > block.timestamp,
+            "Assert: dex restriction window active"
+        );
 
         vm.stopBroadcast();
 
         // ════════════════════════════════════════════════════════════════════════════════
         // PART 4 - POST-DEPLOYMENT VERIFICATION
         // ════════════════════════════════════════════════════════════════════════════════
-        
+
         // Print final deployed addresses for registration in contract register
         console2.log("-----------------------------------------");
         console2.log("AIEF Protocol Deployed Addresses:");
@@ -422,15 +561,27 @@ contract DeployLocalForkScript is Script {
         vm.serializeAddress(rootObj, "rewardsPool", address(rewardsPool));
         vm.serializeAddress(rootObj, "staking", address(staking));
         vm.serializeAddress(rootObj, "founderAlloc", address(founderAlloc));
-        vm.serializeAddress(rootObj, "ecosystemPayment", address(ecosystemPayment));
+        vm.serializeAddress(
+            rootObj,
+            "ecosystemPayment",
+            address(ecosystemPayment)
+        );
         vm.serializeAddress(rootObj, "dappRouter", address(dappRouter));
         vm.serializeAddress(rootObj, "pair", pair);
         vm.serializeAddress(rootObj, "founderPoolWallet", FOUNDER_POOL_WALLET);
-        vm.serializeAddress(rootObj, "lpAccumulatorWallet", LP_ACCUMULATOR_WALLET);
+        vm.serializeAddress(
+            rootObj,
+            "lpAccumulatorWallet",
+            LP_ACCUMULATOR_WALLET
+        );
         vm.serializeAddress(rootObj, "opsSafe", OPS_SAFE_7D5);
         vm.serializeAddress(rootObj, "remainderWallet", TREASURY_SAFE);
-        string memory jsonOutput = vm.serializeAddress(rootObj, "usdt", BSC_USDT);
-        
+        string memory jsonOutput = vm.serializeAddress(
+            rootObj,
+            "usdt",
+            BSC_USDT
+        );
+
         vm.writeJson(jsonOutput, "./deployed_addresses.json");
     }
 }

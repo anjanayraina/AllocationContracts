@@ -63,10 +63,14 @@ contract DeployMainnetScript is Script {
         0x87725cB0c384b1Da1Fb3EC3EABD0f1120ae84c66;
     address public constant OPS_SAFE =
         0x7D5cbcF8dbEa440674aFbaB88FBe0Fe1d9730631;
-    address public constant TREASURY_SAFE = 0x16e50530cA7fCdBe5eAeab584CC48AF82d920C30;
+    address public constant TREASURY_SAFE =
+        0x16e50530cA7fCdBe5eAeab584CC48AF82d920C30;
+    address public constant BACKEND_SIGNER =
+        0xCB6b98fA60011DC8FEEb5568fFf6a9cD74CbB34B;
 
     // 1.2 Fixed BSC Addresses (Mainnet Constants)
-    address public constant PANCAKESWAP_V2_ROUTER = 0x10ED43C718714eb63d5aA57B78B54704E256024E;
+    address public constant PANCAKESWAP_V2_ROUTER =
+        0x10ED43C718714eb63d5aA57B78B54704E256024E;
     address public constant BSC_USDT =
         0x55d398326f99059fF775485246999027B3197955;
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
@@ -80,8 +84,23 @@ contract DeployMainnetScript is Script {
     DappStakeRouter public dappRouter;
     address public pair;
 
+    function getPrivateKey() internal view returns (uint256) {
+        string memory pkStr = vm.envOr("PRIVATE_KEY", string(""));
+        if (bytes(pkStr).length == 0) {
+            return
+                0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
+        }
+        bytes memory pkBytes = bytes(pkStr);
+        if (pkBytes.length >= 2 && pkBytes[0] == "0" && pkBytes[1] == "x") {
+            return uint256(vm.parseBytes32(pkStr));
+        } else {
+            return
+                uint256(vm.parseBytes32(string(abi.encodePacked("0x", pkStr))));
+        }
+    }
     function run() public {
-        address BACKEND_SIGNER = 0xCB6b98fA60011DC8FEEb5568fFf6a9cD74CbB34B;
+        uint256 deployerPrivateKey = getPrivateKey();
+        address deployerAddress = vm.addr(deployerPrivateKey);
 
         // Strict prerequisite checks for mainnet: verification of correct code presence
         require(
@@ -110,11 +129,11 @@ contract DeployMainnetScript is Script {
         );
 
         // Start broadcasting from EOA key supplied via command line
-        vm.startBroadcast();
+        vm.startBroadcast(deployerPrivateKey);
 
-        // Safety assertion that active sender is indeed DEPLOYER_EOA
+        // Safety assertion that derived address matches DEPLOYER_EOA
         require(
-            msg.sender == DEPLOYER_EOA,
+            deployerAddress == DEPLOYER_EOA,
             "Deployer EOA mismatch! Active deployer key is not DEPLOYER_EOA"
         );
 
@@ -180,17 +199,19 @@ contract DeployMainnetScript is Script {
             OPS_SAFE
         );
 
-        // Step 8 — Set StakingRewardsPool Address in AIEFToken
+        // Step 7 — Set StakingRewardsPool Address in AIEFToken
         token.setStakingRewardsPool(address(rewardsPool));
 
-        // Step 7 — Distribute Token Allocations
+        // Step 8 — Distribute Token Allocations
         token.transfer(address(rewardsPool), 400_000_000e18); // 80% — Rewards Pool
         token.transfer(address(founderAlloc), 25_000_000e18); // 5%  — Founders Pool
         token.transfer(TREASURY_SAFE, 75_000_000e18); // 15% — Treasury Safe
 
         // Steps 9 & 10 — PancakeSwap Liquidity Seeding, Pair Creation, and Registration
         // SKIPPED: These will be performed manually post-deployment.
-        console2.log("Note: PancakeSwap pair creation and registration skipped in deployment script (to be done manually).");
+        console2.log(
+            "Note: PancakeSwap pair creation and registration skipped in deployment script (to be done manually)."
+        );
 
         // Step 11 — Set All Exemptions in AIEFToken (Must be set BEFORE enableTrading())
         token.setExempt(address(dappRouter), true, true); // burnExempt=true, dexExempt=true
@@ -436,7 +457,9 @@ contract DeployMainnetScript is Script {
         );
         // DEX Pair does not exist yet as it will be created manually post-deployment.
         require(pair == address(0), "PostCheck: DEX Pair should be address(0)");
-        console2.log("  [PASS] All 6 deployed contract addresses contain bytecode");
+        console2.log(
+            "  [PASS] All 6 deployed contract addresses contain bytecode"
+        );
 
         // ── 2. Ownership & Trading (irreversible) ────────────────────────────
         require(
