@@ -49,6 +49,8 @@ interface IERC20 {
     ) external returns (bool);
 }
 
+contract DummyDexPair {}
+
 contract DeployTestnetScript is Script {
     // 1.1 Confirmed Wallet Addresses — Checked and checksummed for Solidity compilation
     address public constant DEPLOYER_EOA =
@@ -160,11 +162,13 @@ contract DeployTestnetScript is Script {
         // Step 7 - Distribute Token Allocations
         token.transfer(address(rewardsPool), 400_000_000e18); // 80% — Rewards Pool
         token.transfer(address(founderAlloc), 25_000_000e18); // 5%  — Founders Pool
-        token.transfer(TREASURY_SAFE, 75_000_000e18); // 15% — Treasury Safe
+        token.transfer(TREASURY_SAFE, 75_000_000e18 - 11000e18); // 15% — Treasury Safe (minus 11,000 AIEF kept on deployer for testing)
 
-        // Steps 9 & 10 - PancakeSwap Liquidity Seeding, Pair Creation, and Registration
-        // SKIPPED: These will be performed manually post-deployment.
-        console2.log("Note: PancakeSwap pair creation and registration skipped in deployment script (to be done manually).");
+        // Deploy mock PancakeSwap V2 Pair (DummyDexPair)
+        DummyDexPair mockPair = new DummyDexPair();
+        pair = address(mockPair);
+        token.setDexPair(pair);
+        console2.log("Mock PancakeSwap pair deployed and registered:", pair);
 
         // Step 11 - Set All Exemptions in AIEFToken
         // burnExempt true, dexExempt true
@@ -181,8 +185,71 @@ contract DeployTestnetScript is Script {
         token.setExempt(OPS_SAFE_7D5, true, false);
         token.setExempt(OPS_SAFE_705, true, false);
 
+        // 1. EXEMPT SELL TEST
+        // Transfer 1,000 AIEF to the pair while deployer is exempt.
+        // Expecting 100% of tokens to be delivered (0% tax, 0% burn).
+        uint256 pairExemptBefore = token.balanceOf(pair);
+        token.transfer(pair, 1000e18);
+
+        require(
+            token.balanceOf(pair) == pairExemptBefore + 1000e18,
+            "Assert: Exempt sell - pair received exactly 1000 AIEF"
+        );
+
         // Remove deployer exemption (must be the last exemption call)
         token.removeExempt(deployerAddress);
+
+        // 2. NON-EXEMPT SELL TEST (DEX Sell Tax + Transfer Burn Test)
+        // Transfer 10,000 AIEF to the pair while deployer is non-exempt.
+        // Calculations:
+        // - Gross amount: 10,000 AIEF
+        // - 4% Sell Tax: 400 AIEF
+        //   - 25% (100 AIEF) is burned (supply-reducing)
+        //   - 25% (100 AIEF) to founderPoolWallet
+        //   - 25% (100 AIEF) to rewardsPool
+        //   - 25% (100 AIEF) to lpAccumulatorWallet
+        // - Net amount after tax: 9,600 AIEF
+        // - 0.5% Transfer Burn on 9,600: 48 AIEF (burned, supply-reducing)
+        // - Net received by pair: 9,600 - 48 = 9,552 AIEF
+        // Total burned: 100 AIEF + 48 AIEF = 148 AIEF
+        uint256 pairBefore = token.balanceOf(pair);
+        uint256 supplyBefore = token.totalSupply();
+        uint256 founderBefore = token.balanceOf(FOUNDER_POOL_WALLET);
+        uint256 poolBefore = token.balanceOf(address(rewardsPool));
+        uint256 lpBefore = token.balanceOf(LP_ACCUMULATOR_WALLET);
+
+        token.transfer(pair, 10000e18);
+
+        require(
+            token.balanceOf(pair) == pairBefore + 9552e18,
+            "Assert: Non-exempt sell - pair received exactly 9552 AIEF"
+        );
+        require(
+            token.totalSupply() == supplyBefore - 148e18,
+            "Assert: Non-exempt sell - total supply reduced by 148 AIEF"
+        );
+        require(
+            token.balanceOf(FOUNDER_POOL_WALLET) == founderBefore + 100e18,
+            "Assert: Non-exempt sell - founderPoolWallet received 100 AIEF"
+        );
+        require(
+            token.balanceOf(address(rewardsPool)) == poolBefore + 100e18,
+            "Assert: Non-exempt sell - rewardsPool received 100 AIEF"
+        );
+        require(
+            token.balanceOf(LP_ACCUMULATOR_WALLET) == lpBefore + 100e18,
+            "Assert: Non-exempt sell - lpAccumulatorWallet received 100 AIEF"
+        );
+
+        // Ensure deployer EOA holds exactly 0 tokens post-deploy
+        require(
+            token.balanceOf(deployerAddress) == 0,
+            "Assert: Deployer EOA balance is 0"
+        );
+
+        // Step 14 - Point of no return: Call enableTrading now that deployer balance is 0 and exemptions are removed
+        token.enableTrading();
+        console2.log("Trading has been successfully enabled on the AIEFToken!");
 
         // Note: Step 12 requires calls from the OPS_SAFE multisig. Since EOA cannot
         // call these, we log them for manual execution post-deployment (see console outputs).
@@ -193,18 +260,18 @@ contract DeployTestnetScript is Script {
 
         // Token Contract Assertions
         require(
-            token.totalSupply() == 500_000_000e18,
-            "Assert: totalSupply is 500M"
+            token.totalSupply() == 500_000_000e18 - 148e18,
+            "Assert: totalSupply is 500M minus 148 burned AIEF"
         );
         require(
-            token.tradingEnabled() == false,
-            "Assert: tradingEnabled is false"
+            token.tradingEnabled() == true,
+            "Assert: tradingEnabled is true"
         );
         require(
             token.rewardsPool() == address(rewardsPool),
             "Assert: rewardsPool is correct"
         );
-        require(token.dexPair() == address(0), "Assert: dexPair is correct");
+        require(token.dexPair() == pair, "Assert: dexPair is correct");
         require(
             token.founderPoolWallet() == FOUNDER_POOL_WALLET,
             "Assert: founderPoolWallet is correct"
@@ -276,8 +343,8 @@ contract DeployTestnetScript is Script {
 
         // StakingRewardsPool Assertions
         require(
-            rewardsPool.poolBalance() == 400_000_000e18,
-            "Assert: rewards pool balance is 400M"
+            rewardsPool.poolBalance() == 400_000_100e18,
+            "Assert: rewards pool balance is 400M plus 100 AIEF from sell tax"
         );
         require(
             rewardsPool.signer() == BACKEND_SIGNER,
@@ -345,31 +412,33 @@ contract DeployTestnetScript is Script {
 
         // Token Distribution Assertions
         require(
-            token.balanceOf(address(rewardsPool)) == 400_000_000e18,
-            "Assert: token balance rewards pool"
+            token.balanceOf(address(rewardsPool)) == 400_000_100e18,
+            "Assert: token balance rewards pool is 400M + 100 AIEF from sell tax"
         );
         require(
             token.balanceOf(address(founderAlloc)) == 25_000_000e18,
             "Assert: token balance founder alloc"
         );
 
-        // Sum of all key token holdings: 400M (Rewards) + 25M (Founders) + 75M (Treasury Safe / LP liquidity) == 500M
+        // Sum of all key token holdings must equal the current total supply
         require(
             token.balanceOf(address(rewardsPool)) +
                 token.balanceOf(address(founderAlloc)) +
-                token.balanceOf(TREASURY_SAFE) ==
-                500_000_000e18,
-            "Assert: Sum of all holdings is 500M"
+                token.balanceOf(TREASURY_SAFE) +
+                token.balanceOf(pair) +
+                token.balanceOf(LP_ACCUMULATOR_WALLET) +
+                token.balanceOf(FOUNDER_POOL_WALLET) ==
+                token.totalSupply(),
+            "Assert: Sum of all holdings equals total supply"
         );
 
         // ════════════════════════════════════════════════════════════════════════════════
         // STEP 14 - POINT OF NO RETURN: enableTrading + renounceOwnership
         // ════════════════════════════════════════════════════════════════════════════════
-        // SKIPPED: enableTrading() and renounceOwnership() require a set dexPair,
-        // and must be performed manually post-deployment after the pool is established.
+        // Executed enableTrading() in-script once deployer balance reached 0.
         require(
-            token.tradingEnabled() == false,
-            "Assert: tradingEnabled is false"
+            token.tradingEnabled() == true,
+            "Assert: tradingEnabled is true"
         );
         require(token.owner() == deployerAddress, "Assert: owner is deployer");
 
