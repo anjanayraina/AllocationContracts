@@ -861,4 +861,162 @@ contract DeploymentChecklistTest is Test {
         assertEq(buyerBal, 0, "Smoke 6: buyer should have received nothing");
         console2.log(">> SMOKE TEST 6 SUCCESSFUL!\n");
     }
+
+    // Comprehensive End-to-End System Integration Test
+    // Flow tested:
+    // 1. User deposits $1,000 USDT to DappStakeRouter
+    // 2. DappStakeRouter buys AIEF from Mock DEX Pair (Triggers DEX buy and standard transfer logic)
+    // 3. User stake position is dynamically created in StakingContract
+    // 4. Staking Contract holds the principal securely
+    // 5. User performs early unstake (triggering slash penalty)
+    // 6. Early slash tax splits (FOUNDER_POOL, REWARDS_POOL, LP_ACCUMULATOR, BURN) are validated exactly
+    function testIntegration_USDT_Router_Stake_Flow() public {
+        console2.log("\n======================================================================");
+        console2.log("SYSTEM INTEGRATION TEST: END-TO-END USDT -> DEPOSIT -> AUTO-SWAP -> LOCK -> EARLY UNSTAKE SLASH TAX SPLIT");
+        console2.log("======================================================================");
+
+        address user = address(0x999999);
+        uint256 depositUsdtAmount = 1_000e18; // $1,000 USDT deposit
+
+        // Mint USDT to the user
+        MockUSDT(BSC_USDT).mint(user, depositUsdtAmount);
+        console2.log("User Minted USDT:", depositUsdtAmount / 1e18);
+
+        vm.startPrank(user);
+        IERC20(BSC_USDT).approve(address(dappRouter), depositUsdtAmount);
+        console2.log("User approved DappStakeRouter to spend $1,000 USDT");
+
+        // Execute dynamic purchase and lock staking
+        console2.log("Executing dappRouter.stake() into Plan 1 (60 days)...");
+        uint256 positionId = dappRouter.stake(
+            depositUsdtAmount,
+            1, // minAiefOut
+            1, // planId 1 (Standard 60-day Lock)
+            block.timestamp + 10 minutes
+        );
+        vm.stopPrank();
+
+        // 1. Confirm stake position is active and holds AIEF
+        assertEq(staking.positionCount(user), 1);
+        (uint256 principal, uint8 planId, uint64 stakedAt, uint32 lockPeriod, bool active) = staking.getPosition(user, positionId);
+        console2.log("--- Staking Position ---");
+        console2.log("Principal AIEF Locked:", principal / 1e18);
+        console2.log("Lock Period (seconds):", lockPeriod);
+        assertTrue(active);
+
+        // 2. Fast forward time by 65 days to unlock unstaking
+        // Plan 1 has a 60-day lock period.
+        // We warp 65 days (which is > 60 days lock period) so we can call unstake().
+        // Since 65 days elapsed is >= 60 days but < 120 days, it falls under T2 penalty (10% slash).
+        console2.log("\nFast forwarding time by 65 days to unlock unstake...");
+        vm.warp(block.timestamp + 65 days);
+
+        // 3. User performs an Early Unstake (triggers T2 slash penalty of 10%)
+        // Let's capture the state before the early unstake
+        uint256 rewardsPoolBefore = token.balanceOf(address(rewardsPool));
+        uint256 founderPoolBefore = token.balanceOf(FOUNDER_POOL_WALLET);
+        uint256 lpAccumulatorBefore = token.balanceOf(LP_ACCUMULATOR_WALLET);
+        uint256 deadBefore = token.balanceOf(DEAD);
+        uint256 userBalBefore = token.balanceOf(user);
+
+        console2.log("\nExecuting early unstake (slash penalty triggers)...");
+        vm.prank(user);
+        staking.unstake(positionId);
+
+        // Check state after unstake
+        uint256 rewardsPoolAfter = token.balanceOf(address(rewardsPool));
+        uint256 founderPoolAfter = token.balanceOf(FOUNDER_POOL_WALLET);
+        uint256 lpAccumulatorAfter = token.balanceOf(LP_ACCUMULATOR_WALLET);
+        uint256 deadAfter = token.balanceOf(DEAD);
+        uint256 userBalAfter = token.balanceOf(user);
+
+        // Calculate early slash penalty details (T2 = 10% principal slash)
+        uint256 expectedSlashAmt = principal * 10 / 100;
+        uint256 expectedBurnPart = expectedSlashAmt * 25 / 100; // 25% of slash burned (sent to DEAD)
+        uint256 expectedFounderPart = expectedSlashAmt * 25 / 100; // 25% of slash to founder pool
+        uint256 expectedRewardsPart = expectedSlashAmt * 25 / 100; // 25% of slash to rewards pool
+        uint256 expectedLpPart = expectedSlashAmt - expectedBurnPart - expectedFounderPart - expectedRewardsPart; // Remaining to LP accumulator
+        uint256 netToUser = principal - expectedSlashAmt; // Principal minus 10% slash
+
+        // Let's print out the exact penalty splits and verify they match calculations
+        console2.log("--- Slash Penalty Splits ---");
+        console2.log("Total Principal Slashed (10%):", expectedSlashAmt / 1e18);
+        console2.log("Burn Component (25%):", expectedBurnPart / 1e18);
+        console2.log("Founder Pool Component (25%):", expectedFounderPart / 1e18);
+        console2.log("Rewards Pool Component (25%):", expectedRewardsPart / 1e18);
+        console2.log("LP Accumulator Component:", expectedLpPart / 1e18);
+        console2.log("Net AIEF returned to User Wallet:", netToUser / 1e18);
+
+        // Assert splits are correctly delivered to their destination safes/contracts
+        assertEq(founderPoolAfter - founderPoolBefore, expectedFounderPart, "Integration: Founder Pool share mismatch");
+        assertEq(rewardsPoolAfter - rewardsPoolBefore, expectedRewardsPart, "Integration: Rewards Pool share mismatch");
+        assertEq(lpAccumulatorAfter - lpAccumulatorBefore, expectedLpPart, "Integration: LP Accumulator share mismatch");
+        
+        // Assert DEAD balance increased by the burn component (transferred to DEAD)
+        assertEq(deadAfter - deadBefore, expectedBurnPart, "Integration: DEAD burn component mismatch");
+
+        // Assert user received exactly their net principal
+        assertEq(userBalAfter - userBalBefore, netToUser, "Integration: Net returned principal mismatch");
+
+        console2.log(">> SYSTEM INTEGRATION TEST SUCCESSFUL!\n");
+    }
+
+    // Founder Allocation USDT -> Staking Campaign Integration Test
+    // Flow tested:
+    // 1. Founder pays $1,000 USDT (USDT is transferred to TREASURY_SAFE).
+    // 2. OPS_SAFE verifies the payment receipt off-chain.
+    // 3. OPS_SAFE triggers registerFounder() for the founder's wallet address.
+    // 4. FounderAllocationContract transfers 50,000 AIEF to the StakingContract and creates a position for the founder.
+    function testIntegration_FounderAllocationUSDTFlow() public {
+        console2.log("\n======================================================================");
+        console2.log("SYSTEM INTEGRATION TEST: FOUNDER CAMPAIGN REGISTRATION FLOW");
+        console2.log("======================================================================");
+
+        address founderWallet = address(0x777777);
+        uint256 usdtPayment = 1_000e18; // $1,000 USDT
+        uint256 aiefAllocation = 50_000e18; // 50,000 AIEF allocation
+
+        // 1. Founder transfers $1,000 USDT to Treasury Safe
+        MockUSDT(BSC_USDT).mint(founderWallet, usdtPayment);
+        vm.prank(founderWallet);
+        IERC20(BSC_USDT).transfer(TREASURY_SAFE, usdtPayment);
+
+        console2.log("Founder paid $1,000 USDT. Treasury Safe USDT balance:", IERC20(BSC_USDT).balanceOf(TREASURY_SAFE) / 1e18);
+        assertEq(IERC20(BSC_USDT).balanceOf(TREASURY_SAFE), usdtPayment);
+
+        // 2. OPS_SAFE registers the founder on-chain
+        uint256 poolBalBefore = founderAlloc.poolBalance();
+        console2.log("FounderAllocationContract AIEF pool balance before:", poolBalBefore / 1e18);
+
+        console2.log("OPS_SAFE calls registerFounder()...");
+        vm.prank(DEPLOYER_EOA); // OPS_SAFE mock controller
+        MockGnosisSafe(OPS_SAFE).executeCall(
+            address(founderAlloc),
+            abi.encodeWithSignature(
+                "registerFounder(address,uint256)",
+                founderWallet,
+                aiefAllocation
+            )
+        );
+
+        // 3. Verify Staking position created successfully
+        assertEq(staking.positionCount(founderWallet), 1);
+        (uint256 principal, uint8 planId, , uint32 lockPeriod, bool active) = staking.getPosition(founderWallet, 0);
+
+        console2.log("--- Founder Staking Verification ---");
+        console2.log("Founder Staked Principal (Expected 50,000):", principal / 1e18);
+        console2.log("Staking Plan ID (Expected 5):", planId);
+        console2.log("Lock Period (6 Months):", lockPeriod / 1 days, "days");
+        assertTrue(active);
+
+        assertEq(principal, aiefAllocation);
+        assertEq(planId, 5);
+        assertEq(lockPeriod, 360 days);
+
+        // Verify pool balance is correctly decremented
+        assertEq(founderAlloc.poolBalance(), poolBalBefore - aiefAllocation);
+        console2.log("Founder Allocation Pool Balance After:", founderAlloc.poolBalance() / 1e18);
+
+        console2.log(">> FOUNDER STAKING CAMPAIGN INTEGRATION TEST SUCCESSFUL!\n");
+    }
 }
